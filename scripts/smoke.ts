@@ -1,11 +1,16 @@
 // M7 final smoke + M8 session wave (docs/plan.md "Milestones"): one command,
 // full loop, self-verifying. Steps 1–15 walk the feedback-grammar loop
 // (docs/feedback-grammar.md) as three principals against a throwaway daemon;
-// steps 16–20 drive the D20 session-instance loop the way an agent does —
+// steps 16–21 drive the D20 session-instance loop the way an agent does —
 // through the real CLI (`board up` → REST iterate → `board instances` →
 // `board down`) with BOARD_DATA_DIR pointed at this smoke's temp registry —
-// and step 19 proves the D22 stdio connector (spawned as plain `node`, no bun
-// on PATH) resolves the live session instance over MCP.
+// step 19 proves the D22 stdio connector (spawned as plain `node`, no bun
+// on PATH) resolves the live session instance over MCP, and step 20 proves
+// the D23 D4 discovery + explicit connect: a second agent's connector
+// process runs `board_servers` (finds both servers, boards where a
+// credential exists, no secrets) and `board_connect` (pins by instance id,
+// then by {url, token} — the pinned publish lands on the pinned daemon, not
+// the auto-resolution favorite).
 // Temp data dir + scratch ports throughout (never the real ~/.board or :7800
 // — AGENTS.md invariant); asserts every step; prints SMOKE PASS/FAIL, exits
 // 0/1.
@@ -175,6 +180,14 @@ const SESSION_MD_V3 = SESSION_MD_V2.replace(
   "got the human sign-off — v3 published through the D22 MCP connector",
 );
 
+// The D23 D4 step's pinned publish — v3 on the release-plan board, landing on
+// the SMOKE daemon through the pinned beta connector while the session
+// instance (the auto-resolution favorite) is still live.
+const V3_MD = V2_MD.replace(
+  "- [ ] run the smoke",
+  "- [x] run the smoke — D23 D4 explicit connect verified",
+);
+
 // The `board up` output contract (the same lines cli/src/instances.test.ts
 // parses): id/url/token/env/human-link, plus the board id from the link.
 interface InstanceUp {
@@ -293,6 +306,58 @@ function startConnector(env: Record<string, string>) {
       return (await proc.exited) ?? -1;
     },
   };
+}
+
+// The opencode-shaped child env for connector spawns: node on PATH with bun
+// stripped (the connector is node-runnable by design — D22), ambient BOARD_*
+// credentials deleted, then the caller's BOARD_* overrides applied. Both
+// connector-driving steps (D22's instance loop and D23 D4's discovery +
+// connect) spawn through this so their env shapes stay identical.
+function connectorChildEnv(
+  overrides: Record<string, string | undefined>,
+): Record<string, string> {
+  const bunDir =
+    Bun.which("bun") !== null ? dirname(Bun.which("bun") as string) : null;
+  const pathNoBun = (process.env.PATH ?? "")
+    .split(":")
+    .filter((p) => p.length > 0 && (bunDir === null || p !== bunDir))
+    .join(":");
+  assert(
+    pathNoBun.length > 0,
+    "PATH without bun resolved empty — cannot spawn the connector",
+  );
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (v !== undefined) {
+      env[k] = v;
+    }
+  }
+  env.PATH = pathNoBun;
+  delete env.BOARD_MCP_TOKEN;
+  delete env.BOARD_INSTANCE;
+  delete env.BOARD_TOKEN;
+  for (const [k, v] of Object.entries(overrides)) {
+    if (v === undefined) {
+      delete env[k];
+    } else {
+      env[k] = v;
+    }
+  }
+  return env;
+}
+
+// A loopback port with nothing on it (grab-and-release) — the "shared daemon
+// down" fixture for the D23 D4 step's connector env.
+function closedPort(): number {
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: () => new Response(""),
+  });
+  const port = server.port; // kernel-assigned; typed number | undefined
+  server.stop(true);
+  assert(typeof port === "number", "kernel did not assign a scratch port");
+  return port;
 }
 
 async function run(): Promise<0 | 1> {
@@ -999,33 +1064,13 @@ async function run(): Promise<0 | 1> {
         // BOARD_* pointing at this smoke's temp registry. No BOARD_MCP_TOKEN —
         // the smoke daemon has no wired shared credential here, so resolution
         // takes the D22 instance path: newest healthy session instance first.
-        const bunDir =
-          Bun.which("bun") !== null
-            ? dirname(Bun.which("bun") as string)
-            : null;
-        const pathNoBun = (process.env.PATH ?? "")
-          .split(":")
-          .filter((p) => p.length > 0 && (bunDir === null || p !== bunDir))
-          .join(":");
-        assert(
-          pathNoBun.length > 0,
-          "PATH without bun resolved empty — cannot spawn the connector",
+        const conn = startConnector(
+          connectorChildEnv({
+            BOARD_DATA_DIR: dataDir,
+            BOARD_HOST: "127.0.0.1",
+            BOARD_PORT: String(new URL(baseUrl).port),
+          }),
         );
-        const connEnv: Record<string, string> = {};
-        for (const [k, v] of Object.entries(process.env)) {
-          if (v !== undefined) {
-            connEnv[k] = v;
-          }
-        }
-        connEnv.BOARD_DATA_DIR = dataDir;
-        connEnv.BOARD_HOST = "127.0.0.1";
-        connEnv.BOARD_PORT = String(new URL(baseUrl).port);
-        connEnv.PATH = pathNoBun;
-        delete connEnv.BOARD_MCP_TOKEN;
-        delete connEnv.BOARD_INSTANCE;
-        delete connEnv.BOARD_TOKEN;
-
-        const conn = startConnector(connEnv);
         let exitCode = -1;
         try {
           const init = await conn.rpc(1, "initialize", {
@@ -1047,8 +1092,8 @@ async function run(): Promise<0 | 1> {
             list.result as { tools: Array<{ name: string }> } | undefined
           )?.tools;
           assert(
-            list.id === 2 && tools !== undefined && tools.length === 13,
-            `offline tools/list should carry the 13-tool manifest, got ${tools?.length ?? "none"}`,
+            list.id === 2 && tools !== undefined && tools.length === 15,
+            `offline tools/list should carry the 15-tool manifest (13 + the two D23 D4 connector-local tools), got ${tools?.length ?? "none"}`,
           );
           assert(
             tools.some((t) => t.name === "board_publish"),
@@ -1112,6 +1157,243 @@ async function run(): Promise<0 | 1> {
         assert(
           exitCode === 0,
           `connector should exit 0 on stdin EOF, got ${exitCode}`,
+        );
+      },
+    );
+
+    await step(
+      "discovery + explicit connect (D23 D4): beta finds the servers, pins, and the pin overrides auto-resolution",
+      async () => {
+        // The second agent's connector: shared = a CLOSED port (so
+        // auto-resolution would fall through to the newest healthy instance —
+        // making the pin-override proof below meaningful), no wired shared
+        // credential, no BOARD_INSTANCE — the discovery shape.
+        const conn = startConnector(
+          connectorChildEnv({
+            BOARD_DATA_DIR: dataDir,
+            BOARD_HOST: "127.0.0.1",
+            BOARD_PORT: String(closedPort()),
+          }),
+        );
+        let exitCode = -1;
+        try {
+          const list = await conn.rpc(1, "tools/list");
+          const tools = (
+            list.result as { tools: Array<{ name: string }> } | undefined
+          )?.tools;
+          assert(
+            list.id === 1 &&
+              tools !== undefined &&
+              tools.length === 15 &&
+              tools.some((t) => t.name === "board_servers") &&
+              tools.some((t) => t.name === "board_connect"),
+            `beta tools/list should carry 15 tools incl. board_servers/board_connect, got ${tools?.length ?? "none"}`,
+          );
+          // Discovery works with the shared daemon down: the shared entry is
+          // status-only with a hint; the live session instance lists its
+          // boards (the board at v3 from step 19).
+          const discover = await conn.rpc(2, "tools/call", {
+            name: "board_servers",
+            arguments: {},
+          });
+          const dResult = discover.result as
+            | { isError?: boolean; content: Array<{ text: string }> }
+            | undefined;
+          assert(
+            discover.id === 2 &&
+              dResult !== undefined &&
+              dResult.isError !== true,
+            `board_servers errored: ${JSON.stringify(discover).slice(0, 300)}`,
+          );
+          const discovered = JSON.parse(dResult.content[0].text) as {
+            servers: Array<{
+              kind: string;
+              id?: string;
+              url?: string;
+              status: string;
+              credential: boolean;
+              boards?: Array<{ id: string; current_version: number }>;
+              hint?: string;
+            }>;
+          };
+          const sharedEntry = discovered.servers.find(
+            (srv) => srv.kind === "shared",
+          );
+          assert(
+            sharedEntry?.status === "down" &&
+              (sharedEntry.hint ?? "").includes("make serve"),
+            `shared entry should be down with a hint, got: ${JSON.stringify(sharedEntry)}`,
+          );
+          const instanceEntry = discovered.servers.find(
+            (srv) => srv.id === session.id,
+          );
+          assert(
+            instanceEntry?.status === "up" &&
+              instanceEntry.credential === true &&
+              instanceEntry.boards?.some(
+                (b) => b.id === session.boardId && b.current_version === 3,
+              ) === true,
+            `session instance should be up with the board at v3, got: ${JSON.stringify(instanceEntry)}`,
+          );
+          // No secrets, ever: none of the three credentials the smoke holds
+          // appears in the discovery output (invariant 7).
+          const envToken = readEnvToken(instancePaths(dataDir, session.id));
+          assert(envToken !== null, "session env file lost its token mid-step");
+          for (const secret of [alpha, beta, envToken]) {
+            assert(
+              !dResult.content[0].text.includes(secret),
+              "board_servers output leaked credential material",
+            );
+          }
+          // Pin the session instance by id; the pinned board_get proves
+          // proxied calls follow the pin.
+          const pin = await conn.rpc(3, "tools/call", {
+            name: "board_connect",
+            arguments: { instance_id: session.id },
+          });
+          const pinResult = pin.result as
+            | { isError?: boolean; content: Array<{ text: string }> }
+            | undefined;
+          assert(
+            pin.id === 3 &&
+              pinResult !== undefined &&
+              pinResult.isError !== true,
+            `board_connect {instance_id} errored: ${JSON.stringify(pin).slice(0, 300)}`,
+          );
+          const pinEcho = JSON.parse(pinResult.content[0].text) as {
+            connected: boolean;
+            target: { kind: string; id: string };
+          };
+          assert(
+            pinEcho.connected === true &&
+              pinEcho.target.kind === "instance" &&
+              pinEcho.target.id === session.id,
+            `unexpected connect echo: ${pinResult.content[0].text}`,
+          );
+          const got = await conn.rpc(4, "tools/call", {
+            name: "board_get",
+            arguments: { board_id: session.boardId },
+          });
+          const gotResult = got.result as
+            | { isError?: boolean; content: Array<{ text: string }> }
+            | undefined;
+          assert(
+            got.id === 4 &&
+              gotResult !== undefined &&
+              gotResult.isError !== true,
+            `pinned board_get errored: ${JSON.stringify(got).slice(0, 300)}`,
+          );
+          const gotBoard = JSON.parse(gotResult.content[0].text) as {
+            board: { id: string };
+          };
+          assert(
+            gotBoard.board.id === session.boardId,
+            "pinned board_get should have routed to the session instance",
+          );
+          // Now pin the SMOKE daemon directly ({url, token} — the
+          // manager-minted flow) and publish to the release-plan board: with
+          // the session instance still live, the pin must override
+          // newest-instance auto-resolution (the D23 D4 semantics).
+          const repin = await conn.rpc(5, "tools/call", {
+            name: "board_connect",
+            arguments: { url: baseUrl, token: beta },
+          });
+          const repinResult = repin.result as
+            | { isError?: boolean; content: Array<{ text: string }> }
+            | undefined;
+          assert(
+            repin.id === 5 &&
+              repinResult !== undefined &&
+              repinResult.isError !== true,
+            `board_connect {url, token} errored: ${JSON.stringify(repin).slice(0, 300)}`,
+          );
+          const repinEcho = JSON.parse(repinResult.content[0].text) as {
+            connected: boolean;
+            target: { kind: string; url: string };
+          };
+          assert(
+            repinEcho.connected === true &&
+              repinEcho.target.kind === "direct" &&
+              repinEcho.target.url === baseUrl,
+            `unexpected repin echo: ${repinResult.content[0].text}`,
+          );
+          const pub = await conn.rpc(6, "tools/call", {
+            name: "board_publish",
+            arguments: {
+              board_id: board.id,
+              format: "markdown",
+              content: V3_MD,
+              expected_version: 2,
+              label: "via the D23 D4 pin",
+            },
+          });
+          const pubResult = pub.result as
+            | { isError?: boolean; content: Array<{ text: string }> }
+            | undefined;
+          assert(
+            pub.id === 6 &&
+              pubResult !== undefined &&
+              pubResult.isError !== true,
+            `pinned board_publish errored: ${JSON.stringify(pub).slice(0, 300)}`,
+          );
+          const published = JSON.parse(pubResult.content[0].text) as {
+            board_id: string;
+            n: number;
+          };
+          assert(
+            published.board_id === board.id && published.n === 3,
+            `pinned publish should be v3 on the release-plan board, got: ${JSON.stringify(published)}`,
+          );
+          // It landed on the SMOKE daemon (the pinned target)...
+          const check = await api("GET", `/api/boards/${board.id}`, alpha);
+          expectStatus(check, 200, "pinned publish readback");
+          assert(
+            json<{ board: { current_version: number } }>(check).board
+              .current_version === 3,
+            "release-plan board should be at v3 after the pinned publish",
+          );
+          // ...and NOT on the session instance auto-resolution would have
+          // picked.
+          const wrong = await fetch(`${session.url}/api/boards/${board.id}`, {
+            headers: { authorization: `Bearer ${envToken}` },
+          });
+          assert(
+            wrong.status === 404,
+            `pinned publish must NOT land on the session instance: got HTTP ${wrong.status}`,
+          );
+          // Status echo + reset round the pin off.
+          const status = await conn.rpc(7, "tools/call", {
+            name: "board_connect",
+            arguments: {},
+          });
+          const statusEcho = JSON.parse(
+            (status.result as { content: Array<{ text: string }> }).content[0]
+              .text,
+          ) as { connected: boolean; target: { kind: string } };
+          assert(
+            statusEcho.connected === true &&
+              statusEcho.target.kind === "direct",
+            `status echo should show the direct pin, got: ${JSON.stringify(statusEcho)}`,
+          );
+          const reset = await conn.rpc(8, "tools/call", {
+            name: "board_connect",
+            arguments: { reset: true },
+          });
+          const resetEcho = JSON.parse(
+            (reset.result as { content: Array<{ text: string }> }).content[0]
+              .text,
+          ) as { connected: boolean; reset: boolean };
+          assert(
+            resetEcho.connected === false && resetEcho.reset === true,
+            `reset echo unexpected: ${JSON.stringify(resetEcho)}`,
+          );
+        } finally {
+          // ALWAYS tear the connector down — EOF on stdin, clean exit expected.
+          exitCode = await conn.end();
+        }
+        assert(
+          exitCode === 0,
+          `beta connector should exit 0 on stdin EOF, got ${exitCode}`,
         );
       },
     );
@@ -1193,7 +1475,7 @@ async function run(): Promise<0 | 1> {
       const sPaths = instancePaths(dataDir, sessionId);
       const sEntry = readInstanceEntry(sPaths);
       if (sEntry !== null && sEntry.closedAt === undefined) {
-        // the smoke died before step 19's `board down` — no leaked daemon
+        // the smoke died before step 21's `board down` — no leaked daemon
         try {
           await teardownInstance(sEntry, sPaths, {
             exportKeepsakes: false,

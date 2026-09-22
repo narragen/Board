@@ -105,6 +105,49 @@ describe("mcp endpoint", () => {
     }
   });
 
+  test("connector-local tools (D23 D4): omitted from the listing, named honestly on a direct call", async () => {
+    const s = server();
+    const agent = await s.createAgent("local-tool-agent");
+    const post = (body: unknown): Promise<Response> =>
+      fetch(`${s.hostUrl}/mcp`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${agent.token}`,
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify(body),
+      });
+    // The daemon's advertised surface stays exactly what it can execute.
+    const list = await post({ jsonrpc: "2.0", id: 1, method: "tools/list" });
+    expect(list.status).toBe(200);
+    const listed = (await list.json()) as {
+      result: { tools: Array<{ name: string }> };
+    };
+    const names = listed.result.tools.map((tool) => tool.name);
+    expect(names).not.toContain("board_servers");
+    expect(names).not.toContain("board_connect");
+    expect(names).toHaveLength(13);
+    // A direct call gets the SDK's own unknown-tool ENVELOPE (an isError
+    // result) with the honest connector-local message naming the fix.
+    for (const name of ["board_servers", "board_connect"]) {
+      const call = await post({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name, arguments: {} },
+      });
+      expect(call.status).toBe(200);
+      const body = (await call.json()) as {
+        result?: { isError?: boolean; content: Array<{ text: string }> };
+      };
+      expect(body.result?.isError).toBe(true);
+      expect(body.result?.content[0]?.text).toContain("connector-local");
+      expect(body.result?.content[0]?.text).toContain(name);
+      expect(body.result?.content[0]?.text).toContain("board mcp");
+    }
+  });
+
   test("full agent loop: create, publish, get, list, comments, reply, resolve, restore, end", async () => {
     const s = server();
     const agent = await s.createAgent("loop-agent");

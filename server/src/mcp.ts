@@ -1,11 +1,13 @@
-// MCP Streamable HTTP endpoint (M5-lite, D16): thirteen tools mapping 1:1 onto the
+// MCP Streamable HTTP endpoint (M5-lite, D16): thirteen server tools mapping
+// 1:1 onto the
 // service layer — the same functions the REST routes call, so the event log
 // never distinguishes MCP agents from REST agents. Transport is the SDK's
 // web-standard server transport in stateless JSON mode: every POST gets a
 // fresh server + transport (no sessions), responses are application/json,
 // and no SSE stream is ever held open on the daemon. Tool METADATA (names,
 // descriptions, schemas) lives in mcp-tools.ts — the manifest the agent-side
-// stdio connector also reads; this file owns the handlers.
+// stdio connector also reads (it additionally lists the two connector-local
+// tools, D23 D4); this file owns the handlers.
 import type { Database } from "bun:sqlite";
 import {
   McpServer,
@@ -27,10 +29,13 @@ import {
 import type { Actor } from "./domain.ts";
 import { HttpError, readJsonBody } from "./http.ts";
 import {
+  connectorLocalToolMessage,
+  isConnectorLocalName,
   MCP_SERVER_NAME,
   MCP_SERVER_VERSION,
   MCP_TOOLS,
-  type McpToolName,
+  type McpToolDef,
+  type ServerToolName,
 } from "./mcp-tools.ts";
 import { filterBoards } from "./routes/boards.ts";
 import {
@@ -178,7 +183,7 @@ interface ToolArgs {
 // The service layer is async for publish/restore (render pipeline) and sync
 // everywhere else; handlers await uniformly.
 const TOOL_HANDLERS: {
-  [K in McpToolName]: (
+  [K in ServerToolName]: (
     ctx: McpContext,
   ) => (args: ToolArgs[K]) => CallToolResult | Promise<CallToolResult>;
 } = {
@@ -347,14 +352,14 @@ const TOOL_HANDLERS: {
 };
 
 function registerBoardTools(server: McpServer, ctx: McpContext): void {
-  for (const tool of MCP_TOOLS) {
+  for (const tool of SERVER_TOOLS) {
     server.registerTool(
       tool.name,
       { description: tool.description, inputSchema: tool.inputSchema },
       // Bounded cast: registerTool's overloads infer the callback's arg type
       // from a schema expression at the call site, but the dynamic loop hands
       // it the widened ZodRawShape. TOOL_HANDLERS is keyed by the same
-      // McpToolName union as the manifest, and the SDK validates arguments
+      // ServerToolName union as the manifest, and the SDK validates arguments
       // against the manifest schema before the callback runs — the connector
       // tests pin schema/handler agreement against the live tools/list.
       TOOL_HANDLERS[tool.name](ctx) as unknown as ToolCallback<ZodRawShape>,
@@ -379,6 +384,50 @@ export function handleMcpNonPost(): Response {
   );
 }
 
+// The daemon's registrable tools: the shared manifest minus the two
+// connector-local tools (D23 D4) — they never register here, so the
+// daemon's tools/list advertises exactly what it can execute.
+const SERVER_TOOLS = MCP_TOOLS.filter(
+  (tool): tool is McpToolDef & { name: ServerToolName } =>
+    tool.connectorLocal !== true,
+);
+
+// D23 D4: a direct tools/call for a connector-local tool (board_servers /
+// board_connect) on the daemon surface gets the same isError envelope the
+// SDK emits for unknown tools, but with the honest "connector-local" message
+// naming the fix. Notifications (no id) fall through — the transport
+// consumes them silently, as it would any unknown-tool notification.
+function connectorLocalCallResponse(body: unknown): Response | null {
+  if (
+    typeof body !== "object" ||
+    body === null ||
+    Array.isArray(body) ||
+    (body as { method?: unknown }).method !== "tools/call" ||
+    (body as { id?: unknown }).id === undefined
+  ) {
+    return null;
+  }
+  const params = (body as { params?: unknown }).params;
+  const name =
+    typeof params === "object" && params !== null
+      ? (params as { name?: unknown }).name
+      : undefined;
+  if (typeof name !== "string" || !isConnectorLocalName(name)) {
+    return null;
+  }
+  return new Response(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: (body as { id: unknown }).id,
+      result: {
+        content: [{ type: "text", text: connectorLocalToolMessage(name) }],
+        isError: true,
+      },
+    }),
+    { status: 200, headers: { "content-type": "application/json" } },
+  );
+}
+
 export async function handleMcpPost(
   req: Request,
   ctx: McpContext,
@@ -397,5 +446,9 @@ export async function handleMcpPost(
   // sees the bytes; an empty body is left for the transport to reject as a
   // JSON-RPC parse error.
   const body = await readJsonBody(req);
+  const local = connectorLocalCallResponse(body);
+  if (local !== null) {
+    return local;
+  }
   return transport.handleRequest(req, { parsedBody: body });
 }
