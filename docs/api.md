@@ -136,11 +136,13 @@ The liveness probe `make install` and the Dockerfile `HEALTHCHECK` use.
 
 Streamable HTTP in **stateless JSON mode** (D16): one request = one JSON response; a fresh server + transport per POST — no sessions, no GET SSE stream (**non-POST → 405** `method_not_allowed`, `Allow: POST`). Auth: agent token via `Authorization: Bearer` or `?token=` — a **valid human session token is rejected** (401, D16). Same hardening as `/api` (Host allowlist, cross-site, JSON-only, 8 MB cap). Tools call the same service layer as REST — the event log cannot tell an MCP agent from a REST agent.
 
-> The endpoint is unchanged by D22; only the shipped *wiring* changed. Agent harnesses no longer point at this URL directly — they spawn the local stdio connector (`board mcp`, or `node cli/src/mcp-connector.ts`), which lists tools offline and proxies calls to this endpoint on whichever board server is up (shared daemon or D20 session instance). Everything below describes this endpoint as-is.
+> The endpoint is unchanged by D22; only the shipped *wiring* changed. Agent harnesses no longer point at this URL directly — they spawn the local stdio connector (`board mcp`, or `node cli/src/mcp-connector.ts`), which lists the 15 tools from the shared manifest (its two connector-local ones included) and proxies the rest to this endpoint on whichever board server is up. Per-call resolution (D22, amended by D23 D4): a set `BOARD_INSTANCE` env targets that instance strictly (dead/missing = honest error, no fallthrough), else an explicit `board_connect` pin, else the shared daemon when healthy with `BOARD_MCP_TOKEN`, else the newest healthy session instance, else an honest error. Everything below describes this endpoint as-is.
 
 Tool results are `{content: [{type: "text", text: <JSON>}]}`; store errors come back as `isError: true` with a plain-text message (never JSON-RPC protocol errors); `board_publish` conflict messages append `(current_version: N)` so a retry needs no second round-trip.
 
-The 13 tools:
+The tool surface is 15: the daemon's 13 below, plus the two **connector-local** tools (`board_servers`, `board_connect` — D23 D4) that the local stdio connector lists and handles itself. The daemon's `tools/list` never advertises the connector-local two (its advertised surface is exactly what it can execute); a `tools/call` for one that arrives at `/mcp` directly gets the SDK's unknown-tool envelope (`isError: true`) with a message naming the connector. One single-source manifest (`server/src/mcp-tools.ts`) carries the definitions — the connector-local entries are marked, never duplicated.
+
+The daemon's 13 tools:
 
 | Tool | Arguments | Returns (the JSON in `content[0].text`) |
 |---|---|---|
@@ -157,6 +159,13 @@ The 13 tools:
 | `board_subscribe` | `board_id`, `webhook_url`, `webhook_secret?` | `{id, board_id, principal, webhook_url, created_seq}` |
 | `board_upload_image` | `board_id`, `path` (absolute, on the daemon host) | `{asset_id, board_id, mime, size, embed_markdown: "![image](asset:<id>)", embed_html: "<img src=/assets/<id>>"}` |
 | `board_export` | `board_id` | `{board_id, bytes, encoding: "base64", data}` — the zip base64-encoded; bundles over 8 MB are refused with a pointer to `GET /api/boards/:id/export` |
+
+**Connector-local tools** (D23 D4) — listed and handled by the local stdio connector (`board mcp` / `node cli/src/mcp-connector.ts`), never proxied to a daemon; they work when no board server is running and never include token material in their results:
+
+| Tool | Arguments | Returns (the JSON in `content[0].text`) |
+|---|---|---|
+| `board_servers` | — | `{servers: [{kind: "shared"\|"instance", id?, url?, status: "up"\|"down", credential: boolean, boards?: [{id, title, status, current_version, unresolved_comments}], hint?}]}` — the shared daemon plus every open registry instance, health-probed; boards are listed only where a credential is available (shared: `BOARD_MCP_TOKEN`; instance: its 0600 env file), down/credential-less servers carry a one-line hint |
+| `board_connect` | one form per call: `{url, token}` (manager-minted; **url must be loopback** — enforced structurally), `{instance_id}`, `{shared: true}`, `{}` (status echo), `{reset: true}` | `{connected, target: {kind, url, id?}, boards?}` — the target is validated (health + the token must actually authenticate on a boards list) **before** pinning; a bad target errors and pins nothing. A pin beats auto-resolution for subsequent `board_*` calls (D23 D4's amendment of D22); `{reset: true}` returns to auto |
 
 ## Error codes
 

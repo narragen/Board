@@ -53,6 +53,14 @@ Several agents can share one board. Attribution is the token name — every comm
 
 On a **session instance** the `up`-printed env file carries one token: sourcing it in every agent's shell means shared credentials and one shared name on every entry; minting per-agent tokens (`board token add <name> --instance <id>`) keeps attribution distinct. Pick deliberately.
 
+**New board, or the existing one? Ask when ambiguous.** When a task could either join a board that already exists (a collaboration board, the shared library) or warrants its own new board, **ask the human — never silently pick** (D23 D4: "let's not try to be too clever, let's just be explicit"). Default to asking when the task mentions a board you did not start, a team, or an ongoing review.
+
+**Inviting a contributor / joining as one (D23 D4):** the manager mints the contributor's credential — `board token add <agent-name>` on the board's server (`--instance <id>` for a session instance) — and hands over the **url + token** out of band. The contributor then connects explicitly, never by guessing:
+
+1. `board_servers` — discover the local servers that are actually up (shared daemon + session instances) and the boards on each. Connector-local; works even when nothing is up; never shows tokens.
+2. `board_connect {url, token}` — pin that server for all subsequent `board_*` calls (`{instance_id: "<id>"}` pins a registry instance, `{shared: true}` the shared daemon, `{}` echoes the current target, `{reset: true}` unpins). The target is validated (health + token) before pinning; the url must be loopback.
+3. Work the loop as usual — the attribution, cursor, and presence rules above apply. The per-request stderr diagnostic names the resolved backend and marks a pinned target `(connected)`, so a wrong-target route is visible in the harness's MCP log.
+
 ## The session loop
 
 ```sh
@@ -103,6 +111,8 @@ A collaboration board is a session instance whose task runs for days, not minute
 | `board_subscribe` | registers a webhook for signed event push | board_id, webhook_url, webhook_secret? |
 | `board_upload_image` | copies a local image into a board, verified + sanitized | board_id, path (absolute, on the daemon host) |
 | `board_export` | exports a board as a self-contained zip bundle, base64-encoded | board_id |
+| `board_servers` | **connector-local**: lists the local servers that are up + their boards (works with nothing running) | — |
+| `board_connect` | **connector-local**: pins an explicit server for subsequent `board_*` calls | `{url, token}` \| `{instance_id}` \| `{shared: true}` \| `{}` \| `{reset: true}` |
 
 ## Images
 
@@ -176,7 +186,7 @@ Thirty iterations at 10 s covers ~5 minutes. If the cap hits with nothing new, g
 
 ## Daemon down (or never started)
 
-The `board_*` tools are always listed — the local connector (D22) answers `tools/list` offline. A tool call resolves a backend per request: the shared daemon while it runs (with the wired token), else your newest live session instance, else an honest error telling you how to start a server. Default to a session instance (above): for a normal task do not wait on the shared daemon — `board up` gives you your own board, token, and one-time human link with nothing to ask for. Ask the human to start the shared daemon (`make serve` — you never start, stop, or restart the **shared** daemon) only when the task specifically needs the persistent library: browsing or reusing old boards, boards that outlive the task. Once it is up, re-check with `board_status` and continue. The session loop itself stays REST/CLI-canonical (the env-file workflow above). That rule scopes to the *user's host machine* — if you run inside your own container, the fixed-port server in that box is yours (next section).
+The `board_*` tools are always listed — the local connector (D22) answers `tools/list` itself. A tool call resolves a backend per request (D22, amended by D23 D4): a set `BOARD_INSTANCE` env targets that instance strictly, then an explicit `board_connect` pin, then the shared daemon while it runs (with the wired token), then your newest live session instance, else an honest error telling you how to start a server. Not sure what IS up? `board_servers` lists the local servers and their boards — start there. Default to a session instance (above): for a normal task do not wait on the shared daemon — `board up` gives you your own board, token, and one-time human link with nothing to ask for. Ask the human to start the shared daemon (`make serve` — you never start, stop, or restart the **shared** daemon) only when the task specifically needs the persistent library: browsing or reusing old boards, boards that outlive the task. Once it is up, re-check with `board_status` and continue. The session loop itself stays REST/CLI-canonical (the env-file workflow above). That rule scopes to the *user's host machine* — if you run inside your own container, the fixed-port server in that box is yours (next section).
 
 ## Agent-managed in-box server (your own container)
 
