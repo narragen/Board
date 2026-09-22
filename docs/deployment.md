@@ -1,6 +1,6 @@
 # Deployment
 
-Installing, running, and supervising the daemon — on the host, under systemd, and in Docker — plus the agent-managed session instances (D20). The daemon is a **local-first, loopback-only** service for one human and their agents; nothing in this document changes that (invariant 1, [security.md](security.md)). Since D21 the shared daemon is the **optional persistent library**: setup is one command and never requires it, session instances are the default agent loop, and "running" the daemon here means starting it on demand — or permanently, if you want the library always available. Operations live in the Makefile (D10); this doc is the reference behind `make --help`.
+Installing, running, and supervising the daemon — on the host, under systemd, and in Docker — plus the agent-managed session instances (D20) and the single-container agent box (D23). The daemon is a **local-first, loopback-only** service for one human and their agents; nothing in this document changes that (invariant 1, [security.md](security.md)). Since D21 the shared daemon is the **optional persistent library**: setup is one command and never requires it, session instances are the default agent loop, and "running" the daemon here means starting it on demand — or permanently, if you want the library always available. Operations live in the Makefile (D10); this doc is the reference behind `make --help`.
 
 ## Install
 
@@ -261,3 +261,16 @@ docker exec board bun cli/src/main.ts token revoke <name>
 ### Health
 
 The image's `HEALTHCHECK` polls `GET /api/health` (the daemon's one unauthenticated route, `{ok: true}`) every 30 s via `bun -e`; `docker inspect` / `docker ps` report it. The same endpoint is what `make install` probes and what agents should treat as the daemon-liveness signal (D14).
+
+## Single-container agent box (human outside the container)
+
+The executed D23 shape: the agent lives alone in its own container and the human browses from the host. Per D23 D1=A, the agent manages a board server *inside its own box* — D21's human-management rule governs a daemon on the user's host machine, not the agent's container. This is the documented published-port form ([above](#the-loopback-tension--read-before-you-run)) applied to the agent box itself; the reasoning is identical and the security line does not move (invariant 1 — loopback-only on the host):
+
+- **State on a persistent mount** — container env `BOARD_DATA_DIR=/home/node/board`, so daemon state survives box re-creation (the D23 D3 convention, ratified).
+- **Bind widened at serve time only** — the daemon starts with `BOARD_HOST=0.0.0.0` (the docker proxy cannot reach a loopback-bound listener), while every *client* — CLI, MCP connector, curl — stays pinned to `127.0.0.1`. Why the split is not optional: a box-wide `BOARD_HOST=0.0.0.0` makes clients send `Host: 0.0.0.0:7800`, and the Host-header allowlist (the DNS-rebinding defense) rejects that with 421.
+- **Publish with the loopback prefix** — via the agentbox wrapper: `agentbox run --docker-arg "--publish=127.0.0.1:7800:7800"`. Single token, no inner spaces — the spaced form fails with `docker: invalid IP address` because docker's parser glues a leading space onto the IP.
+- **The human browses the host's localhost forward** — `http://127.0.0.1:7800` on the host reaches the container daemon through the published loopback port; the one-time `?token=` exchange (`board open`) applies unchanged.
+
+**Docker Desktop caveat (WSL2 backend):** `--network host` is *inert* there — the bind lands inside the Docker Desktop VM and never reaches Windows localhost. The published-port form is the working one on such hosts (on plain Linux, host networking remains as documented above).
+
+Boundary today: only the fixed-port server is browsable this way. Session instances are structurally loopback + kernel-random port (D20 boundary, enforced in `cli/src/instances.ts` spawn env), so an agent-owned *instance* cannot serve the published fixed port — enabling that is a deliberate code change, open as D23 D4 follow-through.

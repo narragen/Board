@@ -31,6 +31,10 @@ Do NOT board quick factual questions, code review that belongs in diff/PR toolin
 6. **Resolve**: `board_resolve` (comment id) ONLY when the thread is actually addressed. Never resolve to make noise go away — an unresolved comment is the human's signal that work remains.
 7. **End**: when the work is done and threads are settled, `board_end` (board id) closes the loop.
 
+## Vehicles, never homes
+
+A board is the review vehicle, never the archive (D6 — no sync, no cloud, no persistence beyond zip export). **Before a review cycle closes, save the durable outcomes off-board into the repo/docs**: decisions made → the decision log, approved plans → the plan doc, takeaways → wherever the project keeps truth. If ending the board would destroy the only copy of a decision, the loop is not finished — the board is where a decision gets *made*, not where it *lives*.
+
 ## Shared daemon or session instance?
 
 Pick by lifetime, not preference — the session instance is the default (D21):
@@ -71,6 +75,16 @@ curl -s -H "authorization: Bearer $BOARD_TOKEN" \
 4. **Tear down**: `board down` (resolves `$BOARD_INSTANCE`; an explicit id works too). It ends open boards, keeps each board as a zip under the instance registry, stops the daemon, and purges the temp data dir and the env file — token included. Keepsake zips re-import with `make import`; a dead instance still yields its keepsakes. Several instances can run concurrently — `board instances` lists them.
 
 Keep sessions task-scoped: when the review is done, `board down` — do not leave daemons behind.
+
+## Collaboration boards (a session that runs for days)
+
+A collaboration board is a session instance whose task runs for days, not minutes (D23 D2) — the same machinery on a longer leash, nothing new to spawn. On top of the session loop:
+
+- **Per-agent tokens for attribution** — each agent mints its own (`board token add <name> --instance <id>`) so every comment, reply, and resolve reads as its author.
+- **Per-agent comment cursors** — the `since` cursor is client-held (D15); each consumer persists its own per board. Sharing one cursor means missing each other's threads.
+- **Presence via polls, push as the alternative** — every cursor poll refreshes the agent's `subscriber` row (`GET /api/boards/:id/subscribers` lists who is reading); `board_subscribe` replaces polling for an agent that can receive a webhook.
+- **Durability (D3 — ratified 2026-09-22)** — spawn with `BOARD_DATA_DIR` on a persistent volume: the instance registry and its keepsake zips then survive environment resets (the daemon's own data dir stays OS-temp per D20). Export milestone keepsakes mid-flight (`board export --instance <id> <board_id>`), not only at `down`; recovery is import from the keepsakes (`make import`, or `board up --resume=latest`).
+- **MANDATORY — takeaways land at \<repo path\>** (D6): every collaboration loop carries an explicit line naming where its durable outcomes go, and writes them there before the cycle closes. The board stays served only as long as the exchange needs it; the record lives off-board.
 
 ## Tool reference
 
@@ -162,7 +176,23 @@ Thirty iterations at 10 s covers ~5 minutes. If the cap hits with nothing new, g
 
 ## Daemon down (or never started)
 
-The `board_*` tools are always listed — the local connector (D22) answers `tools/list` offline. A tool call resolves a backend per request: the shared daemon while it runs (with the wired token), else your newest live session instance, else an honest error telling you how to start a server. Default to a session instance (above): for a normal task do not wait on the shared daemon — `board up` gives you your own board, token, and one-time human link with nothing to ask for. Ask the human to start the shared daemon (`make serve` — you never start, stop, or restart the **shared** daemon) only when the task specifically needs the persistent library: browsing or reusing old boards, boards that outlive the task. Once it is up, re-check with `board_status` and continue. The session loop itself stays REST/CLI-canonical (the env-file workflow above).
+The `board_*` tools are always listed — the local connector (D22) answers `tools/list` offline. A tool call resolves a backend per request: the shared daemon while it runs (with the wired token), else your newest live session instance, else an honest error telling you how to start a server. Default to a session instance (above): for a normal task do not wait on the shared daemon — `board up` gives you your own board, token, and one-time human link with nothing to ask for. Ask the human to start the shared daemon (`make serve` — you never start, stop, or restart the **shared** daemon) only when the task specifically needs the persistent library: browsing or reusing old boards, boards that outlive the task. Once it is up, re-check with `board_status` and continue. The session loop itself stays REST/CLI-canonical (the env-file workflow above). That rule scopes to the *user's host machine* — if you run inside your own container, the fixed-port server in that box is yours (next section).
+
+## Agent-managed in-box server (your own container)
+
+Board-domain lifecycle knowledge lives here, in this skill (D23 D2 — skill + docs + the `board` CLI/connector port as one unit), not in any one host's handoff notes. When your container is the box and the human browses from outside it, you manage the box's fixed-port server yourself (D23 D1=A): start it at recovery, self-heal it across sessions — it dies with the box, the data does not (it sits on a persistent mount).
+
+```sh
+# start detached — state on the persistent mount; the bind widens AT SERVE
+# ONLY (the docker proxy cannot reach a loopback-bound listener)
+BOARD_DATA_DIR=~/board BOARD_HOST=0.0.0.0 nohup bun run server/src/main.ts >> /tmp/boardd.log 2>&1 &
+curl -s http://127.0.0.1:7800/api/health   # {"ok":true} = live
+board open <board_id>                      # mint the one-time human link
+```
+
+- **Client posture is the papercut**: keep `BOARD_HOST=0.0.0.0` in the daemon's environment only. In your own shell it makes CLI/MCP clients send `Host: 0.0.0.0:7800`, which the Host-header allowlist (the rebinding defense) rejects with 421 — clients pin to `127.0.0.1`.
+- **Restart-across-sessions runbook**: health-check first; if down, start detached again with the same `BOARD_DATA_DIR` — boards, tokens, and threads are exactly where you left them. This is the recovery the rule above points at when the daemon is *yours*, not the human's.
+- **Only the fixed port is browsable** (published-port form): session instances stay structurally loopback + kernel-random port (D20 boundary), so a human-browsable collaboration board lives on this server, not on an instance. Deployment details and the Docker Desktop caveat: `docs/deployment.md`, "Single-container agent box".
 
 ## Style
 
