@@ -111,6 +111,14 @@ describe("board cli", () => {
     expect(proc.stderr).toContain("usage");
     expect(existsSync(join(home, ".board"))).toBe(false);
   });
+
+  test("token add --force without a name (usage error) never creates the default data dir", () => {
+    const home = freshDir();
+    const proc = runCli(["token", "add", "--force"], { HOME: home });
+    expect(proc.exitCode).toBe(1);
+    expect(proc.stderr).toContain("usage");
+    expect(existsSync(join(home, ".board"))).toBe(false);
+  });
 });
 
 // The serve command shares server/src/main.ts's runDaemon (the two entrypoints

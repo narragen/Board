@@ -710,7 +710,7 @@ async function boardConnectResult(
       if (ctx.sharedToken === null) {
         return localToolError(
           id,
-          "cannot connect: BOARD_MCP_TOKEN is not set — no shared credential to connect with (mint one with `make token add <name>`; `make install` wires it)",
+          "cannot connect: BOARD_MCP_TOKEN is not set — no shared credential to connect with (mint one with `make token add [name]`; `make install` wires it)",
         );
       }
       if (!(await isHealthy(ctx.sharedUrl))) {

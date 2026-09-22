@@ -155,12 +155,62 @@ describe("board token add", () => {
     db.close();
   });
 
-  test("a missing name prints usage and exits 1", () => {
+  // The server's real mint rules (server/src/tokens.ts): the tokens.name
+  // PRIMARY KEY — uniqueness via TokenNameTaken. There is no server-side
+  // charset/length rule to satisfy (mint is CLI-local-db, docs/api.md), so
+  // "satisfies the server's rules" here means: uniqueness holds across many
+  // generated mints, and the mention-friendly shape ^[a-z]+-[a-z]+$ (the
+  // generator's self-imposed, stricter rule) is what the handle looks like.
+  test("a missing name mints a generated color-animal handle", () => {
     const { db, config } = freshDb();
     const { out, err, io } = capture();
     const code = runTokenCommand({ config, argv: ["add"], io });
+    expect(code).toBe(0);
+    expect(err).toEqual([]);
+    const token = findToken(out);
+    expect(token).toBeDefined();
+    const name = /^token for "([^"]+)" /.exec(out.join("\n"))?.[1] ?? "";
+    expect(name).toMatch(/^[a-z]+-[a-z]+$/);
+    expect(verifyToken(db, token ?? "")?.name).toBe(name);
+    db.close();
+  });
+
+  test("generated mints all succeed and differ (uniqueness = the real server rule)", () => {
+    const { db, config } = freshDb();
+    const names: string[] = [];
+    for (let i = 0; i < 25; i++) {
+      const { out, err, io } = capture();
+      const code = runTokenCommand({ config, argv: ["add"], io });
+      expect(code).toBe(0);
+      expect(err).toEqual([]);
+      const name = /^token for "([^"]+)" /.exec(out.join("\n"))?.[1] ?? "";
+      expect(name).toMatch(/^[a-z]+-[a-z]+$/);
+      names.push(name);
+    }
+    expect(new Set(names).size).toBe(names.length);
+    const rows = db
+      .prepare("SELECT name FROM tokens ORDER BY name")
+      .all() as Array<{ name: string }>;
+    expect(rows.map((row) => row.name)).toEqual(names.slice().sort());
+    db.close();
+  });
+
+  test("an explicitly empty name still prints usage and exits 1", () => {
+    const { db, config } = freshDb();
+    const { out, err, io } = capture();
+    const code = runTokenCommand({ config, argv: ["add", ""], io });
     expect(code).toBe(1);
     expect(err.join("\n")).toContain("usage");
+    expect(out).toEqual([]);
+    db.close();
+  });
+
+  test("--force without a name is refused with a remediation hint", () => {
+    const { db, config } = freshDb();
+    const { out, err, io } = capture();
+    const code = runTokenCommand({ config, argv: ["add", "--force"], io });
+    expect(code).toBe(1);
+    expect(err.join("\n")).toContain("--force re-mints an explicit name");
     expect(out).toEqual([]);
     db.close();
   });

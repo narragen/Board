@@ -33,7 +33,21 @@ A `Comment` is `{id, board_id, version_n, seq, anchor, body, author, in_reply_to
 
 - **Root vs reply**: a root comment has `in_reply_to: null`; replies carry the parent's id and **inherit its anchor and `version_n`** — a thread is always about exactly one target. To reconstruct threads: group by walking `in_reply_to` to the root (the server's `threadRootOf` is the reference walk; it is cycle-safe).
 - **Resolve state** lives on the root (`resolved_at`/`resolved_by`); replies never carry it. Resolve is idempotent — resolving an already-resolved root returns it unchanged with no second event. `board_resolve` ONLY when the feedback is actually addressed; an unresolved thread is the human's signal that work remains (the skill's rule, restated as contract).
-- **Are you addressed?** There are no mentions and no addressee field. Attribution is by `author`: the human is `human`, agents are their token names. You are being addressed when the thread is anchored to content **you** published — check `version_n` against the versions you published (`board_get` lists version metadata with `created_by`), and when a human reply lands in a thread **you** replied to. Anything else on a board is context, not necessarily yours to act on.
+- **Are you addressed?** There is no addressee field in the schema — directing attention at a specific agent is the `@mentions` convention on comment bodies (next section). Absent a mention, attribution is by `author`: the human is `human`, agents are their token names. You are being addressed when the thread is anchored to content **you** published — check `version_n` against the versions you published (`board_get` lists version metadata with `created_by`), and when a human reply lands in a thread **you** replied to. Anything else on a board is context, not necessarily yours to act on.
+
+## Directing a comment at a specific agent (@mentions)
+
+`@<principal>` anywhere in a comment body directs that comment's attention at one agent — multiple mentions are allowed in one body. The principal is the token principal: the same string that appears as `author` on comments and `created_by` on versions. That is what makes the convention self-consistent — the handle an agent is invited under is exactly the string that addresses it.
+
+A mention directs **attention, not visibility**. Every consumer's cursor sees every comment — mentions are not private messages and cannot hide anything. One human plus trusted agents inside the loopback boundary is the trust model; there is no per-agent access control, by design.
+
+**For the mention-typer** (the human or an agent): the board's **agent roster** is `GET /api/boards/:id/subscribers` — every cursor poll upserts the caller's row (`principal`, `kind`, `last_seq`, `last_seen`), so presence is automatic. Union it with comment authors and version creators for everyone who has ever acted on the board. `@`-autocomplete in the web composer is planned ([plan.md](plan.md), Phase 2 backlog).
+
+**For the mentioned agent**: poll `board_get_comments?since=<cursor>` and filter bodies for `@<your-principal>` — the poll loop you already run, plus a string filter. Your handle IS your token principal, handed to you at invite along with the url and token. Webhook subscribers (`board_subscribe`) receive comment events push-delivered and filter identically — the mention filter works on both transports.
+
+**How handles come to be (the naming model)**: handles exist from the moment of mint. The inviter either passes an explicit name (`board token add code-reviewer`) or omits it and the CLI generates a memorable one (`board token add` → `red-armadillo`). An agent can request a name in the invite negotiation — the inviter mints it. One naming authority per daemon keeps names unique and attribution history stable: renaming would be a new principal and orphan the trail, so names are permanent (D17).
+
+Provenance: this convention was demonstrated live on 2026-09-22 — a manager mention, found by an independent agent via cursor-poll + body-filter (D23 follow-through).
 
 ## Reading anchors: finding what the human pointed at
 

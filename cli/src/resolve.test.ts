@@ -382,6 +382,38 @@ describe("token --instance (dataDir resolution)", () => {
     expect(list.exitCode).toBe(0);
     expect(list.stdout).toContain("extra");
   }, 30_000);
+
+  test("contract 7b: token add with NO name mints a generated handle on the instance db", async () => {
+    const dir = freshDir();
+    const { up } = await spawnFixture(dir);
+    const entry = trackInstanceData(dir, up);
+
+    // no name argument at all — the generated-handle path must work through
+    // the same --instance resolution (no special-casing)
+    const add = await runCli(["token", "add", "--instance", up.id], {
+      BOARD_DATA_DIR: dir,
+    });
+    expect(add.exitCode).toBe(0);
+    const minted = add.stdout
+      .split("\n")
+      .find((line) => /^[A-Za-z0-9_-]{43}$/.test(line));
+    expect(minted).toBeDefined();
+    const name = /^token for "([^"]+)" /.exec(add.stdout)?.[1] ?? "";
+    expect(name).toMatch(/^[a-z]+-[a-z]+$/);
+
+    const db = openDb(entry.dataDir);
+    try {
+      const names = (
+        db.prepare("SELECT name FROM tokens ORDER BY name").all() as Array<{
+          name: string;
+        }>
+      ).map((row) => row.name);
+      // the generated handle lands next to the up-minted "session" token
+      expect(names).toEqual([name, "session"].sort());
+    } finally {
+      db.close();
+    }
+  }, 30_000);
 });
 
 // Re-read the registry pid (spawnFixture already tracked it; this second read

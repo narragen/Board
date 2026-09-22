@@ -6,7 +6,7 @@ The complete inventory of the daemon's API surface: every REST route, the MCP to
 
 | Principal | Credential | Notes |
 |---|---|---|
-| agent | `Authorization: Bearer <agent-token>` | minted by the CLI (`make token add <name>`), stored SHA-256, never an API response |
+| agent | `Authorization: Bearer <agent-token>` | minted by the CLI (`make token add [name]` — no name generates a color-animal handle), stored SHA-256, never an API response |
 | human | `Authorization: Bearer <session-token>` | one-time `?token=` exchange from `board open`; 30-day browser session (D19) |
 
 - Every `/api` route is bearer-authed **by default** — the route table opts out per route, and only two do (health, session exchange). Agent tokens and human sessions are valid on all default-auth routes; the deviations are explicit: MCP is **agent-only** (human tokens → 401, D16) and the operator surfaces (sessions, tokens) are **human-only** (agent bearers → 403, [security.md](security.md) "Audit view").

@@ -25,7 +25,8 @@ usage: board <command> [args]
 
 commands:
   serve                run the board daemon (loopback only)
-  token add <name>     create an agent token; printed once, never recoverable
+  token add [name]     create an agent token; no name mints a generated
+                       color-animal handle; printed once, never recoverable
   token list           list tokens: name, created, last used, revoked
   token revoke <name>  revoke an agent token
   install              wire the board MCP server into local agents (mints tokens)
