@@ -46,16 +46,17 @@ Pick by lifetime, not preference — the session instance is the default (D21):
 
 Several agents can share one board. Attribution is the token name — every comment, reply, and resolve is stamped with the bearer token's name.
 
-- **Per-agent tokens**: each agent mints its own — `make token add <name>` on the shared daemon, `board token add <name> --instance <id>` on a session instance — so its entries read as that agent.
+- **Per-agent tokens**: each agent mints its own — `make token add <name>` on the shared daemon, `board token add <name> --instance <id>` on a session instance (omit the name for a generated handle like `red-armadillo`) — so its entries read as that agent.
 - **Per-agent cursors**: the `since` cursor is client-held state (D15); each agent persists its own per board. Sharing one cursor means missing each other's threads.
 - **Push**: `board_subscribe` (webhook_url, webhook_secret?) delivers signed events to an agent that can receive one, instead of polling.
 - **Presence**: every agent-token cursor poll refreshes a `cursor` subscriber row; `GET /api/boards/:id/subscribers` lists who is reading.
+- **Addressing a specific agent**: put `@<handle>` in the comment body (prefix or inline) — that directs the comment's attention at one agent, **not privately**: every cursor sees every comment. The roster of mentionable handles is the subscribers list (presence upserts on every poll) union comment authors and version creators — the token principal is the handle (`docs/feedback-grammar.md` "@mentions" is the contract).
 
 On a **session instance** the `up`-printed env file carries one token: sourcing it in every agent's shell means shared credentials and one shared name on every entry; minting per-agent tokens (`board token add <name> --instance <id>`) keeps attribution distinct. Pick deliberately.
 
 **New board, or the existing one? Ask when ambiguous.** When a task could either join a board that already exists (a collaboration board, the shared library) or warrants its own new board, **ask the human — never silently pick** (D23 D4: "let's not try to be too clever, let's just be explicit"). Default to asking when the task mentions a board you did not start, a team, or an ongoing review.
 
-**Inviting a contributor / joining as one (D23 D4):** the manager mints the contributor's credential — `board token add <agent-name>` on the board's server (`--instance <id>` for a session instance) — and hands over the **url + token** out of band. The contributor then connects explicitly, never by guessing:
+**Inviting a contributor / joining as one (D23 D4):** the manager mints the contributor's credential — `board token add <agent-name>` on the board's server (`--instance <id>` for a session instance; omit the name to get a generated handle) — and hands over **three strings** out of band: the **url**, the **token**, and the **handle**: *"you are @\<name\> — poll the cursor and filter comment bodies for your handle; that's how you're addressed."* If the contributor asked for a specific name during invite negotiation, mint that one. The contributor then connects explicitly, never by guessing:
 
 1. `board_servers` — discover the local servers that are actually up (shared daemon + session instances) and the boards on each. Connector-local; works even when nothing is up; never shows tokens.
 2. `board_connect {url, token}` — pin that server for all subsequent `board_*` calls (`{instance_id: "<id>"}` pins a registry instance, `{shared: true}` the shared daemon, `{}` echoes the current target, `{reset: true}` unpins). The target is validated (health + token) before pinning; the url must be loopback.
@@ -89,6 +90,7 @@ Keep sessions task-scoped: when the review is done, `board down` — do not leav
 A collaboration board is a session instance whose task runs for days, not minutes (D23 D2) — the same machinery on a longer leash, nothing new to spawn. On top of the session loop:
 
 - **Per-agent tokens for attribution** — each agent mints its own (`board token add <name> --instance <id>`) so every comment, reply, and resolve reads as its author.
+- **Addressing a specific agent** — `@<handle>` in any comment body directs that comment's attention (never private — every cursor sees every comment); `GET /api/boards/:id/subscribers` is who's here (presence upserts on every poll), and comment threads show who has acted.
 - **Per-agent comment cursors** — the `since` cursor is client-held (D15); each consumer persists its own per board. Sharing one cursor means missing each other's threads.
 - **Presence via polls, push as the alternative** — every cursor poll refreshes the agent's `subscriber` row (`GET /api/boards/:id/subscribers` lists who is reading); `board_subscribe` replaces polling for an agent that can receive a webhook.
 - **Durability (D3 — ratified 2026-09-22)** — spawn with `BOARD_DATA_DIR` on a persistent volume: the instance registry and its keepsake zips then survive environment resets (the daemon's own data dir stays OS-temp per D20). Export milestone keepsakes mid-flight (`board export --instance <id> <board_id>`), not only at `down`; recovery is import from the keepsakes (`make import`, or `board up --resume=latest`).

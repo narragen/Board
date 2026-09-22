@@ -36,7 +36,7 @@ All targets are live (`make list`/`export`/`import` arrived with M6; session `up
 | Spawn a session board | `make up [FILE=<md>] [TITLE="…"] [FLAGS=…]` (or positional `make up plan.md`) |
 | Tear down a session board | `make down [ID=s-xxxx] [FLAGS=…]` |
 | List session boards | `make instances [FLAGS=--all|--prune]` |
-| Mint agent token | `make token add <name>` (`--force` via `make token add <name> FLAGS=--force` re-mints a taken name, D17) |
+| Mint agent token | `make token add [name]` (no name mints a generated color-animal handle — the @mention handle, D23; `--force` via `make token add <name> FLAGS=--force` re-mints a taken name, D17) |
 | Build web app | `make web` |
 | Open UI | `make open [board id]` |
 

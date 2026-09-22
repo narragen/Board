@@ -11,6 +11,7 @@ import {
 } from "../../../server/src/tokens.ts";
 import { dbTarget } from "../resolve.ts";
 import { renderTable } from "../table.ts";
+import { GeneratedNameExhausted, mintWithGeneratedName } from "./handles.ts";
 import { scan } from "./rest.ts";
 
 export interface CommandIo {
@@ -25,19 +26,22 @@ interface TokenCommandInput {
 }
 
 export const TOKEN_USAGE =
-  "usage: board token add <name> [--force] [--instance <id>] | board token list [--instance <id>] | board token revoke <name> [--instance <id>]";
+  "usage: board token add [name] [--force] [--instance <id>] | board token list [--instance <id>] | board token revoke <name> [--instance <id>]";
 
 function tokenAdd(
   db: Database,
-  name: string,
+  name: string | undefined,
   force: boolean,
   io: CommandIo,
 ): number {
-  if (force) {
+  if (force && name !== undefined) {
     // D17: names are permanent, so --force re-mints — revoke whatever row
     // holds the name and mint fresh under the first free suffix, keeping
     // the audit trail. Both facts print; the store-it-now line is the one
-    // sanctioned plaintext surface (invariant 8).
+    // sanctioned plaintext surface (invariant 8). `--force` without a name
+    // never reaches here — it is refused at parse (runTokenCommand): force
+    // means "revoke whatever holds the name", which is only safe for a name
+    // a human chose deliberately, never for a generated handle.
     const { previous, created } = reMintToken(db, { name });
     if (previous !== null) {
       io.stdout(`revoked old token "${previous.name}"`);
@@ -50,7 +54,15 @@ function tokenAdd(
   }
   let created: CreatedToken;
   try {
-    created = createToken(db, { name });
+    // No name: mint a generated handle (`<color>-<animal>`, the @mention
+    // naming model — docs/feedback-grammar.md). The mint attempt is the
+    // collision authority: on the D17 taken-name error, regenerate + retry
+    // (bounded inside mintWithGeneratedName); no inventory pre-fetch, so
+    // concurrent mints cannot race a stale list.
+    created =
+      name === undefined
+        ? mintWithGeneratedName((n) => createToken(db, { name: n }))
+        : createToken(db, { name });
   } catch (err) {
     if (err instanceof TokenNameTaken) {
       // The message carries the agent name only; no token material exists in this branch (invariant 8).
@@ -60,6 +72,10 @@ function tokenAdd(
       io.stderr(
         "a taken name is permanent (D17); re-mint with --force or pick a new name",
       );
+      return 1;
+    }
+    if (err instanceof GeneratedNameExhausted) {
+      io.stderr(`board: ${err.message}`);
       return 1;
     }
     throw err;
@@ -74,7 +90,7 @@ function tokenAdd(
 function tokenList(db: Database, io: CommandIo): number {
   const tokens = listTokens(db);
   if (tokens.length === 0) {
-    io.stdout("no tokens yet; create one with: board token add <name>");
+    io.stdout("no tokens yet; create one with: board token add [name]");
     return 0;
   }
   const header = ["NAME", "CREATED", "LAST USED", "REVOKED"];
@@ -141,7 +157,22 @@ export function runTokenCommand({
         return 1;
       }
       const name = scanned.positional[0];
-      if (name === undefined || name.length === 0) {
+      // An omitted name mints a generated handle (the @mention naming model);
+      // an explicitly empty name stays a usage error — `add ""` is a
+      // fat-fingered typo, not an omission. Checked before withDb: usage
+      // errors never create the data dir (the twice-bitten footgun).
+      if (name !== undefined && name.length === 0) {
+        io.stderr(TOKEN_USAGE);
+        return 1;
+      }
+      // WHY refused, not silently generated: --force revokes whatever row
+      // holds the target name (D17) — pointed at a random handle, a collision
+      // with a named token would revoke a live credential. Force is for
+      // deliberately chosen names only.
+      if (scanned.bools.has("force") && name === undefined) {
+        io.stderr(
+          "board: --force re-mints an explicit name; pass <name> (drop --force to mint a generated handle)",
+        );
         io.stderr(TOKEN_USAGE);
         return 1;
       }

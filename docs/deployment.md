@@ -50,7 +50,7 @@ make install     # wire the board MCP server into local agents + mint their toke
 - **The connector (D22)** — what all four wirings point at: a stdio MCP server (`board mcp` / `node cli/src/mcp-connector.ts`) that answers `initialize`/`ping` locally, lists the 15 tools from the shared manifest (13 proxied + the two D23-D4 connector-local discovery/connect tools), and resolves a real backend per request — a set `BOARD_INSTANCE` env (strict), else a `board_connect` pin (D23 D4 explicit targeting), else the shared daemon when healthy with `BOARD_MCP_TOKEN` set, else the newest healthy session instance from the D20 registry (loopback-only, credential from the instance env file), else an honest error explaining how to start one. It never auto-spawns a daemon, so the wired `board_*` tools work against **any** running board server — session instances included.
 - `--force` re-mints a taken token name — names are permanent (D17): the old token is revoked and the fresh one lands under the first free suffix (`board-<agent>`, `board-<agent>-2`, …).
 
-Tokens by hand (any agent, or scripts): `make token add <name>` (`board token add <name> [--force]`), `board token list`, `board token revoke <name>`. Minting is **CLI-only by design** — no API route ever creates or echoes a token.
+Tokens by hand (any agent, or scripts): `make token add [name]` (`board token add [name] [--force]` — omit the name for a generated color-animal handle like `red-armadillo`, the handle agents are mentioned by, D23), `board token list`, `board token revoke <name>`. Minting is **CLI-only by design** — no API route ever creates or echoes a token.
 
 ## Run
 
@@ -251,12 +251,12 @@ Backups are unchanged: `make export` per board (against the published port), or 
 No credential is baked into the image. Mint inside the running container — the exec inherits `BOARD_DATA_DIR=/data` and the `bun` user's write access:
 
 ```
-docker exec board bun cli/src/main.ts token add <name>          # print-once plaintext
+docker exec board bun cli/src/main.ts token add [name]          # print-once plaintext; no name → generated handle
 docker exec board bun cli/src/main.ts token list
 docker exec board bun cli/src/main.ts token revoke <name>
 ```
 
-(the `make token add <name>`-equivalent; names are permanent — `--force` re-mints under a suffixed name, D17). Point host-side agent configs at the published port with the minted token — `make install` itself is a host-side flow (it writes per-agent configs under the *executing* user's home, so run it on the host, not via exec).
+(the `make token add [name]`-equivalent; names are permanent — `--force` re-mints under a suffixed name, D17). Point host-side agent configs at the published port with the minted token — `make install` itself is a host-side flow (it writes per-agent configs under the *executing* user's home, so run it on the host, not via exec).
 
 ### Health
 
