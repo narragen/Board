@@ -927,6 +927,11 @@ describe("mcp connector — D23 D4 discovery + explicit connect", () => {
       "http://127.0.0.1:7800/?q=1",
       "http://tok@127.0.0.1:7800",
       "http://user:pass@127.0.0.1:7800",
+      // Non-root path — MCP endpoint URL is not a server base URL; accepting
+      // it caused false-positive health (SPA fallback 200) → misleading JSON
+      // parse error (board_connect {url, token} guard 2026-09-23).
+      "http://127.0.0.1:7800/mcp",
+      "http://127.0.0.1:7800/api/boards",
     ]) {
       const rejected = await callTool(ctx, "board_connect", {
         url,

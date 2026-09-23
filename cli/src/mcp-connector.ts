@@ -249,6 +249,10 @@ function isLoopbackHttpUrl(url: string): boolean {
       parsed.username === "" &&
       parsed.password === "" &&
       parsed.search === "" &&
+      parsed.pathname === "/" && // reject sub-paths (e.g. "/mcp") — the MCP
+      // endpoint URL is not a board-server base URL; accepting it caused
+      // false-positive health (SPA fallback 200) → misleading JSON-parse
+      // error (board_connect {url, token} guard 2026-09-23).
       (host === "127.0.0.1" || host === "localhost" || host === "::1")
     );
   } catch {
