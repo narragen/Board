@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
   ApiError,
   completePasteExchange,
@@ -22,6 +22,15 @@ import { installDom } from "./test-dom.ts";
 import { clearSessionToken, setSessionToken } from "./token.ts";
 
 installDom();
+
+// bun runs every test file in one process — an unrestored global fetch mock
+// silently answers every LATER file's real fetches (the daemon-route and
+// connector integration tests included) with this file's last canned
+// responder. Capture the real fetch at import and restore it after each test.
+const realFetch = globalThis.fetch;
+afterEach(() => {
+  globalThis.fetch = realFetch;
+});
 
 interface RecordedCall {
   input: string;
