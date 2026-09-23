@@ -313,7 +313,23 @@ async function resolveBackend(
   if (sharedHealthy && ctx.sharedToken !== null && ctx.sharedUrl !== null) {
     return { kind: "shared", url: ctx.sharedUrl, token: ctx.sharedToken };
   }
-  for (const candidate of instanceCandidates(ctx.instancesDir)) {
+  const candidates = instanceCandidates(ctx.instancesDir);
+  // Emit diagnostic when shared daemon is healthy but unwired (token not set)
+  // and instances are available — the user is in the container case where
+  // make install's write to opencode.jsonc failed (EROFS).
+  if (
+    sharedHealthy &&
+    ctx.sharedToken === null &&
+    ctx.sharedUrl !== null &&
+    candidates.length > 0
+  ) {
+    ctx.diagnose(
+      "board connector: shared daemon at " +
+        ctx.sharedUrl +
+        " is healthy but unwired (BOARD_MCP_TOKEN not set); routed to session instance — run `make install` or export BOARD_MCP_TOKEN to use the shared daemon",
+    );
+  }
+  for (const candidate of candidates) {
     if (await isHealthy(candidate.url)) {
       return candidate;
     }

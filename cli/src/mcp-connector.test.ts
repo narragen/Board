@@ -427,6 +427,55 @@ describe("mcp connector — backend resolution order", () => {
     }
   });
 
+  test("shared healthy but unwired with an instance up: container-case diagnostic fires (silent when wired)", async () => {
+    // The container case: make install could not wire the shared token
+    // (read-only opencode.jsonc, EROFS), so no BOARD_MCP_TOKEN reaches the
+    // connector while the shared daemon is healthy and a session instance
+    // exists — resolution falls through to the instance, and the diagnostic
+    // must name the split-brain and the fix.
+    const s = startTestServer();
+    try {
+      const registry = freshDir("board-connector-test-");
+      const instance = await spawnInstance({
+        registryDataDir: registry,
+        agentTokenName: "unwired-diag-agent",
+      });
+      spawned.push({
+        pid: instance.entry.pid,
+        dataDir: instance.entry.dataDir,
+      });
+      const unwired = contextFor({
+        dataDir: registry,
+        port: Number(new URL(s.hostUrl).port), // shared: healthy, NO token
+      });
+      const result = await callTool(unwired.ctx, "board_create", {
+        title: "Container case",
+      });
+      expect(result.isError).toBeUndefined();
+      const created = JSON.parse(toolText(result)) as { id: string };
+      const onInstance = await fetch(
+        `${instance.entry.url}/api/boards/${created.id}`,
+        { headers: { authorization: `Bearer ${instance.token}` } },
+      );
+      expect(onInstance.status).toBe(200); // fell through to the instance
+      const joined = unwired.diagnostics.join("\n");
+      expect(joined).toContain("healthy but unwired (BOARD_MCP_TOKEN not set)");
+      expect(joined).toContain("export BOARD_MCP_TOKEN");
+      // diagnostics never carry credential material (invariant 7)
+      expect(joined).not.toContain(instance.token);
+      // Wired case: with the shared token in scope the diagnostic is silent.
+      const wired = contextFor({
+        dataDir: registry,
+        port: Number(new URL(s.hostUrl).port),
+        token: (await s.createAgent("wired-diag-agent")).token,
+      });
+      await callTool(wired.ctx, "board_list", {});
+      expect(wired.diagnostics.join("\n")).not.toContain("healthy but unwired");
+    } finally {
+      await s.stop();
+    }
+  });
+
   test("shared 401 relays the re-mint hint (credential missing or rejected)", async () => {
     const s = startTestServer();
     try {

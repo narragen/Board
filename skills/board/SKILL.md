@@ -42,6 +42,31 @@ Pick by lifetime, not preference — the session instance is the default (D21):
 - **Session instance** (D20) — **the default**: a **task-scoped loopback daemon you own end to end**: `board up` spawns it (OS-temp data dir, random port, one agent token), `board down` tears it down with zip keepsakes. No shared server needed — a task gets its own human review loop that should not outlive it.
 - **Shared daemon** (`127.0.0.1:7800`) — the **optional persistent library** (D21) for **cross-task boards** that outlive a session: browsing or reusing old boards. The human owns its lifecycle; you never start or stop it. The MCP wiring is the local connector (D22): the `board_*` tools are always listed, and a call lands on this daemon while it runs (it is preferred when healthy with the wired token); a session is still driven via the CLI and REST.
 
+## Running inside a container
+
+When your agent runs **inside a container** (e.g. `agentbox`, Docker), `make install`
+may fail to wire the shared daemon's token into the MCP connector because the
+agent config file (`opencode.jsonc`) is on a **read-only filesystem** inside the
+container. The symptom: **your browser hits the shared daemon** (port 7800, old
+boards) but **MCP tools hit the session instance** (newest, tunnel boards) — a
+split-brain routing problem.
+
+**Diagnose:** run `board_servers` — the shared daemon shows `credential: false` with
+the hint `no BOARD_MCP_TOKEN credential wired`.
+
+**Fix options:**
+
+1. **Quick (env var):** `export BOARD_MCP_TOKEN=<board-opencode-token>` before starting
+   the agent — the connector reads this and routes to the shared daemon.
+2. **Proper:** run `make install` on the **host machine** (not inside the container),
+   then mount the host's opencode config into the container.
+3. **Persistent:** set `BOARD_MCP_TOKEN` as a Docker env var so every agent spawn
+   gets the shared daemon wired.
+
+**Key rule:** inside a container with a fixed-port server, manage the server lifecycle
+(your own container — the skill's "Agent-managed in-box server" section covers this),
+but wire the connector token on the **host** where the config is writable.
+
 ## Collaborating on a shared board
 
 Several agents can share one board. Attribution is the token name — every comment, reply, and resolve is stamped with the bearer token's name.

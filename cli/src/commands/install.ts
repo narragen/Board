@@ -259,21 +259,45 @@ function wireOpencode(token: string, io: CommandIo): boolean {
     io.stdout(`wired: ${configPath}`);
   } catch (err) {
     ok = false;
-    io.stderr(
-      `board: could not merge the board MCP entry into ${configPath} (${err instanceof Error ? err.message : String(err)}); add it manually under "mcp":`,
-    );
-    io.stderr(`  "board": {`);
-    io.stderr(`    "type": "local",`);
-    io.stderr(
-      `    "command": ["${MCP_CONNECTOR_COMMAND}", "${MCP_CONNECTOR_PATH}"],`,
-    );
-    io.stderr(`    "enabled": true,`);
-    io.stderr(`    "timeout": 60000,`);
-    io.stderr(
-      `    "environment": { "BOARD_MCP_TOKEN": "<board-opencode-token>" }`,
-    );
-    io.stderr(`  }`);
-    io.stderr(`  (${manualTokenNote("opencode")})`);
+    // Container case: a read-only agent-config filesystem (EROFS) means the
+    // token never gets wired, so the connector silently falls through to the
+    // newest session instance while the human's browser hits the shared
+    // daemon — a split-brain the env-var fix below resolves. The placeholder
+    // (not the token) keeps stderr token-free: the plaintext was printed once
+    // above, on stdout (invariant 7).
+    const isReadOnly = err instanceof Error && err.message?.includes("EROFS");
+    if (isReadOnly) {
+      io.stderr(
+        `board: ${configPath} is read-only (EROFS). You are running inside a container.\n` +
+          `Set BOARD_MCP_TOKEN in the connector's environment so it prefers the shared daemon:\n` +
+          `  export BOARD_MCP_TOKEN=<board-opencode-token>\n` +
+          `Or add this MCP entry to opencode.jsonc on your host machine:\n` +
+          `  "board": {\n` +
+          `    "type": "local",\n` +
+          `    "command": ["${MCP_CONNECTOR_COMMAND}", "${MCP_CONNECTOR_PATH}"],\n` +
+          `    "enabled": true,\n` +
+          `    "timeout": 60000,\n` +
+          `    "environment": { "BOARD_MCP_TOKEN": "<board-opencode-token>" }\n` +
+          `  }`,
+      );
+      io.stderr(`  (${manualTokenNote("opencode")})`);
+    } else {
+      io.stderr(
+        `board: could not merge the board MCP entry into ${configPath} (${err instanceof Error ? err.message : String(err)}); add it manually under "mcp":`,
+      );
+      io.stderr(`  "board": {`);
+      io.stderr(`    "type": "local",`);
+      io.stderr(
+        `    "command": ["${MCP_CONNECTOR_COMMAND}", "${MCP_CONNECTOR_PATH}"],`,
+      );
+      io.stderr(`    "enabled": true,`);
+      io.stderr(`    "timeout": 60000,`);
+      io.stderr(
+        `    "environment": { "BOARD_MCP_TOKEN": "<board-opencode-token>" }`,
+      );
+      io.stderr(`  }`);
+      io.stderr(`  (${manualTokenNote("opencode")})`);
+    }
   }
   return copySkill(skillDest, io) && ok;
 }
@@ -322,9 +346,24 @@ function wireClaude(
         ok = false;
         printClaudeManual(io);
       }
-    } catch {
+    } catch (err) {
       ok = false;
-      printClaudeManual(io);
+      // Same container case as wireOpencode: an EROFS from the wiring attempt
+      // means the claude config lives on a read-only filesystem — point at
+      // the env-var fix (placeholder, never the token: invariant 7).
+      const isReadOnly = err instanceof Error && err.message?.includes("EROFS");
+      if (isReadOnly) {
+        io.stderr(
+          `board: \`claude mcp add\` failed because its config is read-only (EROFS). You are running inside a container.\n` +
+            `Set BOARD_MCP_TOKEN in the connector's environment so it prefers the shared daemon:\n` +
+            `  export BOARD_MCP_TOKEN=<board-claude-token>\n` +
+            `Or run this on your host machine:\n` +
+            `  claude mcp add --scope user board --env BOARD_MCP_TOKEN=<board-claude-token> -- ${MCP_CONNECTOR_COMMAND} ${MCP_CONNECTOR_PATH}`,
+        );
+        io.stderr(`  (${manualTokenNote("claude")})`);
+      } else {
+        printClaudeManual(io);
+      }
     }
   } else {
     // Guidance, not a failure: a machine without claude installed is fine.

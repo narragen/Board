@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, mock, test } from "bun:test";
+import * as fs from "node:fs";
 import {
   existsSync,
   mkdirSync,
@@ -629,6 +630,86 @@ describe("board install failure modes", () => {
       expect(err.join("\n")).toContain('"timeout": 60000');
       expect(err.join("\n")).toContain(MCP_CONNECTOR_PATH);
       expect(tokenLines(out)).toHaveLength(1);
+      db.close();
+    });
+  });
+
+  test("read-only config filesystem (EROFS) prints the container guidance, not the manual-merge block, and no token on stderr", () => {
+    withIsolatedEnv(({ xdg }) => {
+      const db = freshDb();
+      const { out, err, io } = capture();
+      const realWriteFileSync = writeFileSync;
+      const configPath = join(xdg, "opencode", "opencode.jsonc");
+      try {
+        // A real EROFS needs a read-only mount (not portable in tests), so
+        // mock the write to raise exactly what a read-only filesystem does;
+        // every other node:fs export stays real via the namespace spread.
+        mock.module("node:fs", () => ({
+          ...fs,
+          writeFileSync: () => {
+            throw new Error(
+              `EROFS: read-only file system, open '${configPath}'`,
+            );
+          },
+        }));
+        const code = runInstallCommand({
+          db,
+          argv: ["--agents", "opencode"],
+          io,
+          checkHealth: HEALTHY,
+          claudeOnPath: NO_CLAUDE,
+        });
+        expect(code).toBe(1);
+      } finally {
+        mock.module("node:fs", () => ({
+          ...fs,
+          writeFileSync: realWriteFileSync,
+        }));
+      }
+      const text = err.join("\n");
+      expect(text).toContain("read-only (EROFS)");
+      expect(text).toContain("You are running inside a container");
+      expect(text).toContain("export BOARD_MCP_TOKEN=");
+      expect(text).toContain("on your host machine");
+      expect(text).toContain(MCP_CONNECTOR_PATH);
+      // the generic manual-merge guidance does not fit the container case
+      expect(text).not.toContain('add it manually under "mcp"');
+      // print-once discipline (invariant 7): the token rides stdout only —
+      // the EROFS guidance carries the placeholder, never the plaintext
+      const token = tokenLines(out)[0];
+      expect(token).toBeDefined();
+      expect(text).not.toContain(token);
+      db.close();
+    });
+  });
+
+  test("claude wiring failure with EROFS prints the container export guidance", () => {
+    withIsolatedEnv(() => {
+      const db = freshDb();
+      const { out, err, io } = capture();
+      const code = runInstallCommand({
+        db,
+        argv: ["--agents", "claude"],
+        io,
+        checkHealth: HEALTHY,
+        claudeOnPath: () => true,
+        runClaude: () => {
+          throw new Error(
+            "EROFS: read-only file system, open '/home/x/.claude.json'",
+          );
+        },
+      });
+      expect(code).toBe(1);
+      const text = err.join("\n");
+      expect(text).toContain("read-only (EROFS)");
+      expect(text).toContain("You are running inside a container");
+      expect(text).toContain("export BOARD_MCP_TOKEN=");
+      expect(text).toContain(
+        "claude mcp add --scope user board --env BOARD_MCP_TOKEN=<board-claude-token>",
+      );
+      const token = tokenLines(out)[0];
+      expect(token).toBeDefined();
+      expect(text).not.toContain(token);
       db.close();
     });
   });
