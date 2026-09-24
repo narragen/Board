@@ -67,6 +67,12 @@
 </div>
 
 <script>
+// Everything lives inside this IIFE. A board's inline script shares one global
+// scope with every other board opened in the same browser session, so a
+// top-level `const BOARD_ID` throws "already been declared" on the SECOND
+// interview board you open — and a script that throws never runs, so that
+// board renders no questions at all. Dogfooded exactly that way.
+(() => {
 // ------------------------------------------------------------------- CONFIG
 const BOARD_ID  = "BOARD_ID_HERE";   // the board you publish this round to
 const VERSION_N = 1;                 // the version number this round becomes
@@ -205,6 +211,7 @@ form.addEventListener("submit", async (event) => {
     button.disabled = false;
   }
 });
+})();
 </script>
 </body>
 </html>

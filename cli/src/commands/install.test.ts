@@ -113,6 +113,11 @@ function withIsolatedEnv(
   }
 }
 
+// The skills `install` ships. Kept here rather than imported so a skill added
+// to install.ts without a test update fails loudly instead of silently.
+const SKILL_NAMES_UNDER_TEST = ["board", "interview"] as const;
+const SKILL_COUNT = SKILL_NAMES_UNDER_TEST.length;
+
 const HEALTHY = () => true;
 const NO_CLAUDE = () => false;
 
@@ -439,9 +444,15 @@ describe("board install tokens", () => {
         }),
       ).toBe(0);
       expect(second.out.join("\n")).toContain(
-        "already installed for opencode — re-mint with: make install FLAGS=--force (or: bun run cli/src/main.ts install --force)",
+        "already installed for opencode — skills refreshed above; the credential and MCP entry are unchanged.",
       );
       expect(tokenLines(second.out)).toEqual([]);
+      // D26: the skills still ship on a re-run. They used to be skipped with
+      // the mint, so the only way to update a skill was to rotate every
+      // agent's credential — copying a file is not a credential operation.
+      expect(
+        second.out.filter((line) => line.startsWith("skill: ")),
+      ).toHaveLength(SKILL_COUNT);
       rows = db
         .prepare("SELECT * FROM tokens WHERE name = ?")
         .all("board-opencode");
@@ -540,7 +551,7 @@ describe("board install wiring", () => {
       expect(code).toBe(0);
       // D25: board ships two skills — the review loop and the scoping method
       // that drives it. Both land in every agent's skills root.
-      for (const name of ["board", "interview"]) {
+      for (const name of SKILL_NAMES_UNDER_TEST) {
         const expected = readFileSync(
           join(import.meta.dir, "..", "..", "..", "skills", name, "SKILL.md"),
           "utf8",
@@ -555,8 +566,9 @@ describe("board install wiring", () => {
           );
         }
       }
-      // 2 skills x 4 wired agents, minus the shared ~/.agents root (codex + pi)
-      expect(out.filter((line) => line.startsWith("skill: "))).toHaveLength(8);
+      expect(out.filter((line) => line.startsWith("skill: "))).toHaveLength(
+        SKILL_COUNT * 4,
+      );
       db.close();
     });
   });

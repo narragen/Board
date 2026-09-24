@@ -248,7 +248,7 @@ Prose is the worst format for most of what goes on a board. If following your pa
 
 | You want | Board format | How |
 |---|---|---|
-| A diagram — before/after, who-owns-what, where a value flows | **markdown** | a ```` ```mermaid ```` fence. Rendered client-side, `securityLevel: "strict"`; a bad diagram degrades to its source instead of breaking the page |
+| A diagram — before/after, who-owns-what, where a value flows | either | markdown: a ```` ```mermaid ```` fence. html: write `<pre class="mermaid">…</pre>` yourself. Rendered client-side, `securityLevel: "strict"`; a bad diagram degrades to its source instead of breaking the page |
 | A table of options against criteria | either | GFM table; rows are individually comment-anchorable |
 | Math | **markdown** | `$x^2$` inline, `$$…$$` display — katex at publish time |
 | Syntax-highlighted code or pseudocode | **markdown** | a fenced block with a language tag |
@@ -256,9 +256,7 @@ Prose is the worst format for most of what goes on a board. If following your pa
 | Questions the human clicks answers into | **html** | the `interview` skill — `skills/interview/SKILL.md` |
 | A screenshot or an image you generated | either | `board_upload_image`, then the snippet it hands back |
 
-**The one trap: mermaid does not run on html boards.** The web app renders mermaid for markdown boards only (`BoardView.tsx`). An html board with a ```` ```mermaid ```` fence or a `<pre class="mermaid">` shows the raw source. A diagram belongs on a markdown board; if a board needs both a diagram and running scripts, publish the diagram as its own markdown board and link it.
-
-Charts are not decoration. A number that matters across time or category is a chart; a paragraph describing that chart is a worse version of the same information.
+Charts are not decoration. A number that matters across time or category is a chart; a paragraph describing that chart is a worse version of the same information. Put a `data-ba` id on a diagram or a section and it stays commentable — the human can anchor a comment to the picture itself.
 
 ## html boards: the app already styles them
 
@@ -276,7 +274,40 @@ An html board mounts into the **host document with no iframe** (D18), so it inhe
 </div>
 ```
 
-`fieldset`, `legend`, `label`, `input`, `textarea`, `select`, `button` are styled, plus `.why` (muted secondary line), `.rec` (a highlighted recommendation), `.settled` (what is already decided), `.note`, `.bar` (the action row), `.ok` / `.bad`. Selected options highlight themselves through `:has(:checked)` — no JavaScript, no aria bookkeeping.
+`fieldset`, `legend`, `label`, `input`, `textarea`, `select`, `button` are styled, plus `.why` (muted secondary line), `.rec` (a highlighted recommendation), `.settled` (what is already decided), `.note`, `.bar` (the action row), `.ok` / `.bad`. Selected options highlight themselves through `:has(:checked)` — no JavaScript, no aria bookkeeping. Full list in [docs/api.md](../../docs/api.md) under *Board rendering surface*.
+
+### Want Tailwind? It is vendored (D26)
+
+```html
+<script src="/libs/tailwind-4.3.3.browser.js"></script>
+```
+
+Utility classes then work as you expect them to. **One rule, and it is the whole difference between a board that looks native and one that looks pasted in:** take every color from Board's own tokens, never from Tailwind's palette. Tailwind's defaults assume a white page; Board runs `color-scheme: light dark`, so `bg-white text-gray-900` is a white card on a near-black app for any reader in dark mode.
+
+```html
+<div class="rounded-lg border p-4 bg-[var(--bg-subtle)] text-[var(--fg)] border-[var(--border-subtle)]">
+```
+
+Layout, spacing, and type utilities are free of this — it is only color. `.board-ui` and Tailwind compose fine; use both.
+
+Two measured caveats. Tailwind v4 emits its base and theme rules inside `@layer`, and unlayered CSS beats layered CSS — so Board's own styling wins and the app's chrome is untouched (verified: fonts, borders, and the content column are identical with and without it). But its generated `<style>` is injected into `<head>`, **not** into your board, so it survives navigation and stays live for every board opened afterwards in that browser session. Its `*, ::before, ::after { border: 0 solid }` reset then applies to boards that never asked for Tailwind. Nothing observed breaks, because Board sets its borders explicitly — but a board that relies on a browser default border may not look the same after someone visits a Tailwind board.
+
+## Your board's script shares one global scope
+
+Every board's inline script runs in the **same** global scope as every other board opened in that browser session. A top-level `const` or `let` therefore throws `already been declared` the second time — and a script that throws never runs, so **that board renders nothing at all**. Dogfooded exactly that way: two interview boards, the second one blank.
+
+Wrap everything you write in an IIFE:
+
+```html
+<script>
+(() => {
+  const BOARD_ID = "…";   // safe — scoped to this function
+  // …
+})();
+</script>
+```
+
+The shipped templates do this, and `skills/templates/templates.test.ts` compiles each one twice in a single context to keep them honest.
 
 **If you do add your own CSS, scope every rule to your own wrapper id.** The board shares this document with the app, so a bare element or `:root` selector restyles the app itself, silently:
 

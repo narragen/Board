@@ -124,6 +124,48 @@ Request cap: 64 MB. Import restores the EXPORTED status (an ended board comes ba
 
 Best-effort by design — cursors are the reliable baseline ([architecture.md](architecture.md)). Note: an SSE connection is **not** recorded as a presence row; only cursor polls and webhook registrations are (see [feedback-grammar.md](feedback-grammar.md) "Presence").
 
+## Board rendering surface (html boards)
+
+Everything an agent-authored html board may rely on from the app it renders inside. D18: the board mounts into the host document with no iframe, so these are the app's own document and origin.
+
+### Vendored libraries — `GET /libs/<file>`
+
+No auth. Version-stamped and immutable (`cache-control: public, max-age=31536000, immutable`); a library upgrade adds a file and never rewrites one, so a board published against an old build keeps working. Fetched from the npm registry and pinned — never a CDN at runtime, which `connect-src 'self'` forbids anyway.
+
+| File | What | Loaded as |
+|---|---|---|
+| `chart-4.4.9.umd.min.js` | Chart.js 4.4.9 | `<script src="/libs/chart-4.4.9.umd.min.js">` in `<head>`; externals are awaited in document order before inline code runs |
+| `tailwind-4.3.3.browser.js` | Tailwind CSS v4 in-browser build (D26) | same. Compiles classes in the page and injects a `<style>`, permitted by `style-src 'unsafe-inline'`. Take colors from Board's tokens (`bg-[var(--bg-subtle)]`) — Tailwind's palette assumes a white page |
+
+### CSS classes — `.board-ui` (D26)
+
+An **agent-facing contract**: a board that used a class name keeps using it, and published versions are immutable, so these names are **added to, never renamed**. Opt in by wrapping the board in `<div class="board-ui">`; everything below is then styled from the app's own theme tokens, dark mode included.
+
+| Element or class | Styled as |
+|---|---|
+| `fieldset`, `legend` | a titled card; the legend takes the accent color |
+| `label` wrapping a radio or checkbox | a full-width clickable row, with a selected state via `:has(:checked)` — no JavaScript |
+| `input`, `textarea`, `select`, `button` | themed field and button chrome |
+| `button[type="submit"]` | the primary action |
+| `.why` | muted secondary line — a consequence under an option, a hint, a status |
+| `.rec` | a highlighted recommendation callout |
+| `.settled` | what is already decided and not up for discussion |
+| `.note` | the small-print label over a free-text note |
+| `.bar` | the action row that closes a form |
+| `.ok` / `.bad` | success and error text |
+
+The app's theme tokens are `:root` custom properties on this same document, so a board's own rules can use them: `var(--bg)`, `var(--bg-subtle)`, `var(--bg-element)`, `var(--fg)`, `var(--fg-muted)`, `var(--border-subtle)`, `var(--border)`, `var(--border-active)`, `var(--primary)`, `var(--secondary)`, `var(--accent)`, `var(--error)`, `var(--warning)`, `var(--success)`, `var(--info)`, `var(--font-sans)`, `var(--font-serif)`, `var(--font-mono)`.
+
+Any CSS a board adds itself **must be scoped to its own wrapper id**. A bare `body`, `*`, `h1` or `:root` rule restyles the app.
+
+### Board scripts share one global scope
+
+An html board's inline scripts are re-created in the host document and run in its global scope — the **same** scope as every other board opened in that browser session. A top-level `const`/`let` throws `already been declared` on the second board, and a script that throws never runs, so that board renders nothing. Board scripts must wrap their bodies in an IIFE. The app cannot fix this retroactively: published versions are immutable, and some boards legitimately define globals.
+
+### Diagrams
+
+`<pre class="mermaid">` blocks render on **both** formats (D26): markdown boards get theirs from the publish pipeline, html boards write the element themselves. Rendering runs with `securityLevel: "strict"` after the html mount resolves, and a block that fails to parse degrades to its source text. A `data-ba` id on the `<pre>` survives rendering, so a diagram stays commentable.
+
 ## Health
 
 | Method + path | Auth | Response |
