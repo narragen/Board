@@ -18,7 +18,7 @@ A terminal agent's interface is one scrolling transcript. Three things go wrong 
 
 - **Decisions get buried.** The question that needed your answer scrolls off-screen behind subagent output. On a board it stays put, with a URL, until you answer it.
 - **Context evaporates.** Discussing row 4 of a ten-row table means scrolling back to it. On a board you comment *on* row 4, and the agent gets the comment attached to it.
-- **Text-only limits what an agent can show you.** The best explanation is usually a diagram, a table, or a chart. Boards render mermaid, math, tables, images, and agent HTML with live charts and click-through questions.
+- **Text-only limits what an agent can show you.** Boards render mermaid, math, tables, images, and agent HTML with live charts and click-through questions.
 
 So: plans to approve, options to pick between, findings to react to, and questions an agent needs answered before it writes the wrong thing.
 

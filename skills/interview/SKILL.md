@@ -61,7 +61,7 @@ Every question also gets a visible free-text note field. The template puts it th
 
 ## Writing a round people can actually answer
 
-- **Write for someone who just switched gears.** Name the subject in plain language before any internal term appears, and define anything they cannot be assumed to know on first use.
+- **Write for someone who just switched gears** — the `board` skill's section of that name has the rules; they apply here more than anywhere.
 - **Number the questions** and keep numbering across rounds. Q7 in round 2 is never also Q7 in round 3.
 - **Give each option a one-line consequence**, not just a label. "Fastest, and accepts NAR-1863 as a documented exposure" beats "use it now."
 - **Lead with what is settled.** Open every round after the first with the decisions already made (`SETTLED` in the template), so nothing gets silently re-litigated.

@@ -114,12 +114,9 @@ Keep sessions task-scoped: when the review is done, `board down` — do not leav
 
 A collaboration board is a session instance whose task runs for days, not minutes (D23 D2) — the same machinery on a longer leash, nothing new to spawn. On top of the session loop:
 
-- **Per-agent tokens for attribution** — each agent mints its own (`board token add <name> --instance <id>`) so every comment, reply, and resolve reads as its author.
-- **Addressing a specific agent** — `@<handle>` in any comment body directs that comment's attention (never private — every cursor sees every comment); `GET /api/boards/:id/subscribers` is who's here (presence upserts on every poll), and comment threads show who has acted.
-- **Per-agent comment cursors** — the `since` cursor is client-held (D15); each consumer persists its own per board. Sharing one cursor means missing each other's threads.
-- **Presence via polls, push as the alternative** — every cursor poll refreshes the agent's `subscriber` row (`GET /api/boards/:id/subscribers` lists who is reading); `board_subscribe` replaces polling for an agent that can receive a webhook.
+- **Tokens, cursors, addressing, and presence** work exactly as in *Collaborating on a shared board* above — nothing new here. One addition: over a long run, comment threads are also a record of who has acted.
 - **Durability (D3 — ratified 2026-09-22)** — spawn with `BOARD_DATA_DIR` on a persistent volume: the instance registry and its keepsake zips then survive environment resets (the daemon's own data dir stays OS-temp per D20). Export milestone keepsakes mid-flight (`board export --instance <id> <board_id>`), not only at `down`; recovery is import from the keepsakes (`make import`, or `board up --resume=latest`).
-- **MANDATORY — takeaways land at \<repo path\>** (D6): every collaboration loop carries an explicit line naming where its durable outcomes go, and writes them there before the cycle closes. The board stays served only as long as the exchange needs it; the record lives off-board.
+- **MANDATORY — takeaways land at \<repo path\>** (D6): every collaboration loop carries an explicit line naming where its durable outcomes go, and writes them there before the cycle closes. Keep the board served only as long as the exchange needs it.
 
 ## Tool reference
 
