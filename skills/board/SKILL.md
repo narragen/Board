@@ -235,16 +235,16 @@ board open <board_id>                      # mint the one-time human link
 
 The person reading your board has been doing something else. They do not remember the ticket, the incident, or the words you have been living in for the last hour. Write for them, not for the version of yourself that just did the work.
 
-- **Plain language before internal language.** Say what the thing is in terms of what the product does, then introduce your terms. Define any term they cannot be assumed to know, in-line, the first time it carries weight.
+- **Plain language before internal language.** Say what the thing is in terms of what the product does, then introduce your terms. Define anything they cannot be assumed to know in-line, the first time it carries weight.
 - **No agent jargon.** "The frontier is empty so I'm exiting the loop" means nothing to them. "Nothing left to decide — here's what we agreed" does.
-- **Steps, numbered, in the order they happen.** For anything sequential — what a request touches, where a failure lands, what you plan to do — number it and mark the step that matters.
-- **Say what you measured versus what you estimated**, every time. And never assert a date, duration, count, or version you have not checked; one invented number discredits the real ones next to it.
+- **Number anything sequential** — what a request touches, where a failure lands, what you plan to do — and mark the step that matters.
+- **Separate measured from estimated**, every time, and never assert a date, count, or version you have not checked. One invented number discredits the real ones beside it.
 - **One topic per board.** Split unrelated work into separate boards.
 - **Label every version.** Lead with a line like `v2 — trimmed the rollout section per your comment` so the human sees what changed and why without diffing.
 
 ## Reach for a picture
 
-Prose is the worst format for most of what goes on a board. If following your paragraph means building a picture in their head, draw the picture instead. What renders where — this is measured, not aspirational:
+Prose is the worst format for most of what goes on a board. If following your paragraph means building a picture in their head, draw the picture instead. What renders where, measured:
 
 | You want | Board format | How |
 |---|---|---|

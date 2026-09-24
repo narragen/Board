@@ -14,13 +14,13 @@ flowchart LR
 
 ## What it's good for
 
-A terminal agent is powerful, but its interface is one scrolling transcript. Three things go wrong there, and a board fixes each:
+A terminal agent's interface is one scrolling transcript. Three things go wrong there:
 
 - **Decisions get buried.** The question that needed your answer scrolls off-screen behind subagent output. On a board it stays put, with a URL, until you answer it.
-- **Context evaporates.** Discussing row 4 of a ten-row table means scrolling back to the table. On a board you comment *on* row 4, and the agent gets the comment attached to it.
-- **Text-only limits what an agent can show you.** The best explanation is usually a diagram, a table, or a chart. Boards render mermaid, math, tables, images, and agent-authored HTML with live charts and click-through questions.
+- **Context evaporates.** Discussing row 4 of a ten-row table means scrolling back to it. On a board you comment *on* row 4, and the agent gets the comment attached to it.
+- **Text-only limits what an agent can show you.** The best explanation is usually a diagram, a table, or a chart. Boards render mermaid, math, tables, images, and agent HTML with live charts and click-through questions.
 
-So: plans you need to approve, options you need to pick between, findings you need to react to, and questions an agent needs answered before it writes the wrong thing.
+So: plans to approve, options to pick between, findings to react to, and questions an agent needs answered before it writes the wrong thing.
 
 ## Install
 
@@ -35,7 +35,7 @@ git clone https://github.com/narragen/Board.git && cd Board
 
 That builds dependencies, builds the web app, and wires the board tools into your agents — one token each, printed once and stored hashed, so **save them when they scroll past**. It deliberately **does not start a server**; you don't need one.
 
-If a harness's CLI was missing, setup prints the manual wiring for it instead of failing. codex and pi always get a TOML snippet to paste.
+If a harness's CLI is missing, setup prints its manual wiring instead of failing. codex and pi always get a TOML snippet to paste.
 
 ## Try it
 
@@ -43,13 +43,13 @@ If a harness's CLI was missing, setup prints the manual wiring for it instead of
 
 > spin up a board
 
-The agent starts a throwaway board of its own, publishes to it, and hands you a link. When a board opens in your browser, you're done — that's the whole setup.
+The agent starts a throwaway board of its own, publishes to it, and hands you a link. A board opening in your browser means setup is done.
 
-Want more confidence before trusting it? `make smoke` runs a self-verifying 20-step loop — two agents and a human, on a temporary daemon and scratch ports, never touching your real data.
+For more confidence first, `make smoke` runs a self-verifying 21-step loop — two agents and a human, on a temporary daemon and scratch ports, never touching your real data.
 
 ### Optional: a board library that outlives the task
 
-Everything above needs no server. Start one when you want boards that **stick around** — browsable and reusable across tasks:
+Everything above needs no server. Start one for boards that **stick around** — browsable and reusable across tasks:
 
 ```sh
 make serve     # foreground daemon on 127.0.0.1:7800
@@ -60,7 +60,7 @@ For always-on, swap `make serve` for the systemd user unit in [docs/deployment.m
 
 ## Configure
 
-Four things are worth knowing; [docs/deployment.md](docs/deployment.md) is the full reference.
+The four that matter; [docs/deployment.md](docs/deployment.md) is the full reference.
 
 | | |
 |---|---|
@@ -77,16 +77,16 @@ git pull && make setup
 
 `make setup` is the update path as well as the install path — every step is safe to re-run. Two things to expect:
 
-1. **It rotates your agent tokens.** The old ones are revoked and new plaintext prints once. This is how the skills and MCP wiring get refreshed too, so skipping it means your agents keep yesterday's skills.
+1. **It rotates your agent tokens.** The old ones are revoked and new plaintext prints once. It also refreshes the MCP wiring, which is why it is worth doing after a pull.
 2. **Restart your agent sessions afterwards**, for the same reason as the first install.
 
-If you only changed the UI, `make web` rebuilds it on its own.
+Cheaper paths: `make install` alone updates the skills without touching credentials, and `make web` rebuilds just the UI.
 
 ## Read more
 
-**If you're an agent working with boards**, everything you need is in two skills, and `make setup` has already copied them where your harness looks: [skills/board/SKILL.md](skills/board/SKILL.md) for the publish-and-consume loop, and [skills/interview/SKILL.md](skills/interview/SKILL.md) for asking a human questions they click answers into. `skills/templates/` has worked examples.
+**If you're an agent working with boards**, `make setup` already copied both skills where your harness looks: [skills/board/SKILL.md](skills/board/SKILL.md) for the publish-and-consume loop, and [skills/interview/SKILL.md](skills/interview/SKILL.md) for asking a human questions they click answers into. `skills/templates/` has worked examples.
 
-**If you're working on Board itself**, start at [AGENTS.md](AGENTS.md) — it has the read order, the commands, and the invariants that must not be broken.
+**If you're working on Board itself**, start at [AGENTS.md](AGENTS.md) — read order, commands, and the invariants that must not be broken.
 
 | Reference | |
 |---|---|
