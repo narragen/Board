@@ -24,17 +24,26 @@ make install     # wire the board MCP server into local agents + mint their toke
 
 - Probes `GET /api/health` first (a down daemon is a warning, not a failure — and since D22 wiring works regardless: the local connector lists the board tools offline, and its tool calls explain how to start a server when one is needed).
 - Mints one agent token per target agent, named `board-<agent>`. The plaintext is **printed once** — it is stored SHA-256 and cannot be shown again (invariant 7/8). Lost it? Re-mint.
-- Wires **opencode**: comment-preserving merge of an `mcp.board` entry into `~/.config/opencode/opencode.jsonc`, plus the skill copied to `~/.config/opencode/skills/board/`. Since D22 the entry is a **local stdio command** — opencode spawns the connector, which resolves a real board server per request — not a remote URL:
+- Wires **opencode**: comment-preserving merge of a `mcp.servers.board` entry into the existing `~/.config/opencode/opencode.{jsonc,json}`, plus the skill copied to `~/.config/opencode/skills/board/`. Since D22 the entry is a **local stdio command** — opencode spawns the connector, which resolves a real board server per request — not a remote URL. The shape is opencode v2's native one (D24):
 
   ```jsonc
-  "board": {
-    "type": "local",
-    "command": ["node", "<repo>/cli/src/mcp-connector.ts"],
-    "enabled": true,
-    "timeout": 60000,
-    "environment": { "BOARD_MCP_TOKEN": "<token>" }
-  }
+  "mcp": { "servers": {
+    "board": {
+      "type": "local",
+      "command": ["node", "<repo>/cli/src/mcp-connector.ts"],
+      "disabled": false,
+      "timeout": { "catalog": 60000, "execution": 60000 },
+      "environment": { "BOARD_MCP_TOKEN": "<token>" }
+    }
+  } }
   ```
+
+  Three details are load-bearing, all measured against opencode v2.0.16 (D24), not inferred:
+  - **`timeout` must be the `{catalog, execution}` object.** A scalar makes v2 drop the whole server entry *silently* — the board tools would simply not appear, with no error anywhere.
+  - **`disabled: false`, not `enabled: true`.** v1's `enabled` key is stripped on load, so writing it configures nothing.
+  - **A legacy `mcp.board` entry is deleted** in the same edit. v2 merges both shapes and the native one wins a name collision, so leaving it behind is dead config that misleads the next reader.
+
+  The target file is the one that already exists (`.jsonc` preferred when both do) — v2's own `opencode mcp add` writes `opencode.json`, and board no longer creates a second config file beside it.
 
   The repo root in the command is absolute, derived from the installer's own module location — not your shell's cwd — and bare `node` is deliberate: agent harness PATHs have node, not reliably bun.
 - Wires **claude code**: stdio form via the CLI — `claude mcp add --scope user board --env BOARD_MCP_TOKEN=<token> -- node <repo>/cli/src/mcp-connector.ts` — plus the skill at `~/.claude/skills/board/`.

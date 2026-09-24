@@ -195,10 +195,16 @@ interface BoardMcpEntry {
   // per-request backend resolution.
   type: "local";
   command: string[];
-  enabled: boolean;
-  // opencode's local-server default (5s per its schema) is shorter than a
-  // board_publish render; 60000 matches the connector's PROXY_TIMEOUT_MS.
-  timeout: number;
+  // opencode v2's native key is `disabled`, not `enabled` (D24): an `enabled`
+  // field is silently stripped on load, so writing it would be a no-op we'd
+  // mistake for configuration.
+  disabled: boolean;
+  // MUST stay the {catalog, execution} object form. opencode v2 silently DROPS
+  // the entire server entry when `timeout` is a scalar (measured against
+  // v2.0.16, D24) — the board tools would vanish with no error. 60000 matches
+  // the connector's PROXY_TIMEOUT_MS; opencode's own default (5s) is shorter
+  // than a board_publish render.
+  timeout: { catalog: number; execution: number };
   environment: { BOARD_MCP_TOKEN: string };
 }
 
@@ -209,7 +215,7 @@ export function mergeOpencodeConfig(
   entry: BoardMcpEntry,
 ): string {
   if (text.trim().length === 0) {
-    return `${JSON.stringify({ mcp: { board: entry } }, null, 2)}\n`;
+    return `${JSON.stringify({ mcp: { servers: { board: entry } } }, null, 2)}\n`;
   }
   // opencode's own loader accepts trailing commas (verified against v2.0.16),
   // so a config opencode runs happily must not fail our stricter parse.
@@ -220,22 +226,47 @@ export function mergeOpencodeConfig(
       `not valid JSONC (${errors.map((e) => printParseErrorCode(e.error)).join(", ")})`,
     );
   }
-  const edits = modify(text, ["mcp", "board"], entry, {
-    formattingOptions: {
-      insertSpaces: true,
-      tabSize: 2,
-      insertFinalNewline: true,
-    },
-  });
-  return applyEdits(text, edits);
+  const formattingOptions = {
+    insertSpaces: true,
+    tabSize: 2,
+    insertFinalNewline: true,
+  };
+  // D24: write opencode v2's native ["mcp","servers","board"], then drop any
+  // legacy ["mcp","board"] we (or an older board) wrote. v2 merges both shapes
+  // and the native one wins a name collision, so the legacy key is dead config
+  // — harmless to opencode, actively confusing to whoever reads the file next.
+  // Two sequential applyEdits passes, not one: jsonc-parser computes each edit
+  // against the text it was given, so batching offsets from two `modify` calls
+  // would corrupt the second.
+  const withEntry = applyEdits(
+    text,
+    modify(text, ["mcp", "servers", "board"], entry, { formattingOptions }),
+  );
+  return applyEdits(
+    withEntry,
+    modify(withEntry, ["mcp", "board"], undefined, { formattingOptions }),
+  );
 }
 
 function manualTokenNote(agent: Agent): string {
   return `BOARD_MCP_TOKEN=<board-${agent}-token> (replace with the token printed above)`;
 }
 
+// D24: opencode v2's own `mcp add` writes opencode.json, while board has always
+// written opencode.jsonc. Both load and merge, so hardcoding .jsonc "works" —
+// but it leaves the human owning two config files with no canonical one. Target
+// the file that already exists; only a fresh install creates one, and .jsonc
+// stays the default there because board writes comments into it.
+export function opencodeConfigPath(dir: string): string {
+  const jsonc = join(dir, "opencode.jsonc");
+  const json = join(dir, "opencode.json");
+  if (existsSync(jsonc)) return jsonc;
+  if (existsSync(json)) return json;
+  return jsonc;
+}
+
 function wireOpencode(token: string, io: CommandIo): boolean {
-  const configPath = join(configHome(), "opencode", "opencode.jsonc");
+  const configPath = opencodeConfigPath(join(configHome(), "opencode"));
   const skillDest = join(
     configHome(),
     "opencode",
@@ -246,8 +277,8 @@ function wireOpencode(token: string, io: CommandIo): boolean {
   const entry: BoardMcpEntry = {
     type: "local",
     command: [MCP_CONNECTOR_COMMAND, MCP_CONNECTOR_PATH],
-    enabled: true,
-    timeout: 60000,
+    disabled: false,
+    timeout: { catalog: 60000, execution: 60000 },
     environment: { BOARD_MCP_TOKEN: token },
   };
   let ok = true;
@@ -273,27 +304,27 @@ function wireOpencode(token: string, io: CommandIo): boolean {
         `board: ${configPath} is read-only (EROFS). You are running inside a container.\n` +
           `Set BOARD_MCP_TOKEN in the connector's environment so it prefers the shared daemon:\n` +
           `  export BOARD_MCP_TOKEN=<board-opencode-token>\n` +
-          `Or add this MCP entry to opencode.jsonc on your host machine:\n` +
+          `Or add this MCP entry under "mcp": { "servers": { … } } in opencode.jsonc on your host machine:\n` +
           `  "board": {\n` +
           `    "type": "local",\n` +
           `    "command": ["${MCP_CONNECTOR_COMMAND}", "${MCP_CONNECTOR_PATH}"],\n` +
-          `    "enabled": true,\n` +
-          `    "timeout": 60000,\n` +
+          `    "disabled": false,\n` +
+          `    "timeout": { "catalog": 60000, "execution": 60000 },\n` +
           `    "environment": { "BOARD_MCP_TOKEN": "<board-opencode-token>" }\n` +
           `  }`,
       );
       io.stderr(`  (${manualTokenNote("opencode")})`);
     } else {
       io.stderr(
-        `board: could not merge the board MCP entry into ${configPath} (${err instanceof Error ? err.message : String(err)}); add it manually under "mcp":`,
+        `board: could not merge the board MCP entry into ${configPath} (${err instanceof Error ? err.message : String(err)}); add it manually under "mcp": { "servers": { … } }:`,
       );
       io.stderr(`  "board": {`);
       io.stderr(`    "type": "local",`);
       io.stderr(
         `    "command": ["${MCP_CONNECTOR_COMMAND}", "${MCP_CONNECTOR_PATH}"],`,
       );
-      io.stderr(`    "enabled": true,`);
-      io.stderr(`    "timeout": 60000,`);
+      io.stderr(`    "disabled": false,`);
+      io.stderr(`    "timeout": { "catalog": 60000, "execution": 60000 },`);
       io.stderr(
         `    "environment": { "BOARD_MCP_TOKEN": "<board-opencode-token>" }`,
       );
