@@ -76,7 +76,17 @@ function rawChunkedRequest(
       socket.end();
     });
     socket.on("data", (chunk: Buffer) => chunks.push(chunk));
-    socket.on("error", reject);
+    // The server is SUPPOSED to answer 413 and hang up mid-upload — that is
+    // the whole point of this helper. Our remaining writes then fail with
+    // EPIPE/ECONNRESET, so rejecting on those turned the behavior under test
+    // into a ~1-in-3 flaky failure. Swallow them and let "close" resolve with
+    // whatever response arrived; every other error is real.
+    socket.on("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "EPIPE" || err.code === "ECONNRESET") {
+        return;
+      }
+      reject(err);
+    });
     socket.setTimeout(5000, () => socket.destroy());
     socket.on("close", () => {
       const raw = Buffer.concat(chunks).toString();

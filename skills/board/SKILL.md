@@ -231,36 +231,65 @@ board open <board_id>                      # mint the one-time human link
 - **Restart-across-sessions runbook**: health-check first; if down, start detached again with the same `BOARD_DATA_DIR` — boards, tokens, and threads are exactly where you left them. This is the recovery the rule above points at when the daemon is *yours*, not the human's.
 - **Only the fixed port is browsable** (published-port form): session instances stay structurally loopback + kernel-random port (D20 boundary), so a human-browsable collaboration board lives on this server, not on an instance. Deployment details and the Docker Desktop caveat: `docs/deployment.md`, "Single-container agent box".
 
-## Style
+## Write it for a human who just switched gears
 
-- Boards are markdown: headings, tables, and mermaid diagrams render in the UI.
-- One topic per board — split unrelated work into separate boards.
-- Label versions: lead with a line like `v2 — trimmed rollout section per feedback` so the human sees what changed and why.
+The person reading your board has been doing something else. They do not remember the ticket, the incident, or the words you have been living in for the last hour. Write for them, not for the version of yourself that just did the work.
 
-## html boards: scope your CSS
+- **Plain language before internal language.** Say what the thing is in terms of what the product does, then introduce your terms. Define any term they cannot be assumed to know, in-line, the first time it carries weight.
+- **No agent jargon.** "The frontier is empty so I'm exiting the loop" means nothing to them. "Nothing left to decide — here's what we agreed" does.
+- **Steps, numbered, in the order they happen.** For anything sequential — what a request touches, where a failure lands, what you plan to do — number it and mark the step that matters.
+- **Say what you measured versus what you estimated**, every time. And never assert a date, duration, count, or version you have not checked; one invented number discredits the real ones next to it.
+- **One topic per board.** Split unrelated work into separate boards.
+- **Label every version.** Lead with a line like `v2 — trimmed the rollout section per your comment` so the human sees what changed and why without diffing.
 
-An html board mounts into the **host document with no iframe** (D18) — its scripts and styles are in the board app's own origin and document. So a bare element or `:root` selector restyles the app itself, silently:
+## Reach for a picture
+
+Prose is the worst format for most of what goes on a board. If following your paragraph means building a picture in their head, draw the picture instead. What renders where — this is measured, not aspirational:
+
+| You want | Board format | How |
+|---|---|---|
+| A diagram — before/after, who-owns-what, where a value flows | **markdown** | a ```` ```mermaid ```` fence. Rendered client-side, `securityLevel: "strict"`; a bad diagram degrades to its source instead of breaking the page |
+| A table of options against criteria | either | GFM table; rows are individually comment-anchorable |
+| Math | **markdown** | `$x^2$` inline, `$$…$$` display — katex at publish time |
+| Syntax-highlighted code or pseudocode | **markdown** | a fenced block with a language tag |
+| A live chart — measured over time or category | **html** | `<script src="/libs/chart-4.4.9.umd.min.js"></script>`, vendored and pinned. Put it in `<head>`: externals are awaited in document order before your inline code runs |
+| Questions the human clicks answers into | **html** | the `interview` skill — `skills/interview/SKILL.md` |
+| A screenshot or an image you generated | either | `board_upload_image`, then the snippet it hands back |
+
+**The one trap: mermaid does not run on html boards.** The web app renders mermaid for markdown boards only (`BoardView.tsx`). An html board with a ```` ```mermaid ```` fence or a `<pre class="mermaid">` shows the raw source. A diagram belongs on a markdown board; if a board needs both a diagram and running scripts, publish the diagram as its own markdown board and link it.
+
+Charts are not decoration. A number that matters across time or category is a chart; a paragraph describing that chart is a worse version of the same information.
+
+## html boards: the app already styles them
+
+An html board mounts into the **host document with no iframe** (D18), so it inherits the app's prose styling for free. For form chrome — questions, inputs, buttons, cards — wrap your board in `<div class="board-ui">` and it picks up the app's real theme tokens, dark mode included:
+
+```html
+<div class="board-ui">
+  <h1>Rollout options</h1>
+  <fieldset>
+    <legend>Q1 · Which region first?</legend>
+    <label><input type="radio" name="q1" value="A"> <b>A</b> us-east
+      <span class="why">Largest blast radius, fastest signal.</span></label>
+  </fieldset>
+  <div class="bar"><button type="submit">Submit</button></div>
+</div>
+```
+
+`fieldset`, `legend`, `label`, `input`, `textarea`, `select`, `button` are styled, plus `.why` (muted secondary line), `.rec` (a highlighted recommendation), `.settled` (what is already decided), `.note`, `.bar` (the action row), `.ok` / `.bad`. Selected options highlight themselves through `:has(:checked)` — no JavaScript, no aria bookkeeping.
+
+**If you do add your own CSS, scope every rule to your own wrapper id.** The board shares this document with the app, so a bare element or `:root` selector restyles the app itself, silently:
 
 ```html
 <style>
   body { max-width: 760px }   /* WRONG — shrinks the whole board app */
   :root { --bg: #fff }        /* WRONG — overrides the host's own variables */
+  #mine h1 { font-size: 2rem }  /* right — scoped to your wrapper */
 </style>
 ```
 
 That exact `body` rule once cut the host's content column from 1169px to 312px, and it reads as a Board layout bug rather than a board-content bug.
 
-Wrap the board in one element and scope every rule to it:
+`skills/templates/interview-round.html` (interactive questions) and `skills/templates/dashboard.html` (charts and status) are the worked examples — start from one of them.
 
-```html
-<style>
-  #myboard { display:block; color:#17181a }
-  #myboard * { box-sizing:border-box }
-  #myboard h1 { font-size:1.45rem }
-</style>
-<div id="myboard">…</div>
-```
-
-`skills/templates/dashboard.html` and `skills/templates/grill-round.html` both do this — start from one of them.
-
-**Interactive boards** (a human clicking answers back to you) are the `grill` skill's job, not a thing to hand-roll: `skills/grill/SKILL.md` owns the question schema and the submit call.
+**Interactive boards** — a human clicking answers back to you — are the `interview` skill's job, not a thing to hand-roll: `skills/interview/SKILL.md` owns the question schema, and the one file that posts answers back.

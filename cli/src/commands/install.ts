@@ -139,10 +139,10 @@ function defaultRunClaude(args: string[]): number {
   return proc.exitCode ?? 1;
 }
 
-// Every skill board ships. `board` is the review loop; `grill` is the scoping
-// method that drives it (D25). Both land in the same per-agent skills root, so
-// adding a third is one entry here.
-const SKILL_NAMES = ["board", "grill"] as const;
+// Every skill board ships. `board` is the review loop; `interview` is the
+// scoping method that drives it (D25). Both land in the same per-agent skills
+// root, so adding a third is one entry here.
+const SKILL_NAMES = ["board", "interview"] as const;
 
 function repoSkillPath(name: string): string {
   return join(import.meta.dir, "..", "..", "..", "skills", name, "SKILL.md");

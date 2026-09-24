@@ -540,7 +540,7 @@ describe("board install wiring", () => {
       expect(code).toBe(0);
       // D25: board ships two skills — the review loop and the scoping method
       // that drives it. Both land in every agent's skills root.
-      for (const name of ["board", "grill"]) {
+      for (const name of ["board", "interview"]) {
         const expected = readFileSync(
           join(import.meta.dir, "..", "..", "..", "skills", name, "SKILL.md"),
           "utf8",
@@ -583,8 +583,8 @@ describe("board install wiring", () => {
     // a plain permissions error IS fixable by hand — keep the old advice
     const other = capture();
     reportSkillCopyFailure(
-      "/repo/skills/grill/SKILL.md",
-      "/somewhere/grill/SKILL.md",
+      "/repo/skills/interview/SKILL.md",
+      "/somewhere/interview/SKILL.md",
       new Error("EACCES: permission denied"),
       other.io,
     );

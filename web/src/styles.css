@@ -938,3 +938,189 @@ body {
 .load-more {
   margin-top: 10px;
 }
+
+/* ---------------------------------------------------------------------------
+   .board-ui — opt-in styling for agent-authored html boards (D26).
+
+   An html board mounts into this document with no iframe (D18), so it already
+   inherits .board-content's prose styling. What it does NOT inherit is form
+   chrome: fieldsets, labels, inputs, and buttons render as raw browser
+   defaults, which is why every agent that wanted a usable interactive board
+   shipped ~60 lines of its own CSS — unthemed, and one stray `body` rule away
+   from restyling this app (dogfooded: a board's `body { max-width: 760px }`
+   cut the host content column from 1169px to 312px).
+
+   So the app owns the baseline. An agent writes semantic HTML inside
+   <div class="board-ui"> and gets the real theme tokens, dark mode included,
+   for zero bytes. Overrides stay the agent's own scoped rules.
+
+   This is an agent-facing contract: these class names are API. Changing one
+   breaks boards already published, and published versions are immutable.
+   Add, don't rename.
+
+   Kept last in this file, and ordered by ascending specificity within itself,
+   so no rule here shadows an app rule that a later line meant to win.
+   --------------------------------------------------------------------------- */
+
+/* forms read as UI, not as prose — sans at UI scale, against the serif body */
+.board-content .board-ui {
+  font-family: var(--font-sans);
+  font-size: 1rem;
+  line-height: 1.55;
+}
+
+/* one question, or one grouped block */
+.board-content .board-ui fieldset {
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 14px 16px 16px;
+  margin: 0 0 14px;
+  background: var(--bg);
+}
+
+.board-content .board-ui legend {
+  font-weight: 600;
+  color: var(--accent);
+  padding: 0 6px;
+}
+
+.board-content .board-ui label {
+  display: block;
+}
+
+.board-content .board-ui textarea,
+.board-content .board-ui input,
+.board-content .board-ui select {
+  width: 100%;
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 8px 10px;
+  resize: vertical;
+}
+
+.board-content .board-ui button {
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg-element);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+/* a choice is a whole clickable row, and :has() gives it a selected state
+   with no JavaScript and no aria bookkeeping */
+.board-content .board-ui label:has(input[type="radio"]),
+.board-content .board-ui label:has(input[type="checkbox"]) {
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 9px 11px;
+  margin: 0 0 6px;
+  cursor: pointer;
+}
+
+.board-content .board-ui label:has(input[type="radio"]):hover,
+.board-content .board-ui label:has(input[type="checkbox"]):hover {
+  border-color: var(--border-active);
+}
+
+.board-content .board-ui label:has(input:checked) {
+  border-color: var(--primary);
+  background: var(--bg-subtle);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+/* secondary text: the consequence under an option, a hint, a status line */
+.board-content .board-ui .why {
+  display: block;
+  color: var(--fg-muted);
+  font-size: 0.9em;
+}
+
+/* the agent's recommendation — the thing the human pushes against */
+.board-content .board-ui .rec {
+  background: var(--bg-subtle);
+  border-left: 3px solid var(--primary);
+  border-radius: 0 6px 6px 0;
+  padding: 9px 12px;
+  margin: 10px 0 12px;
+}
+
+/* what earlier rounds already decided, so nothing is re-litigated */
+.board-content .board-ui .settled {
+  background: var(--bg-subtle);
+  border-left: 3px solid var(--success);
+  border-radius: 0 6px 6px 0;
+  padding: 10px 13px;
+  margin: 0 0 16px;
+  font-size: 0.95em;
+}
+
+.board-content .board-ui .settled ul {
+  margin: 6px 0 0;
+  padding-left: 20px;
+}
+
+/* the note field under a question. Visible, never behind a disclosure
+   triangle: "your option list itself is wrong" is the answer worth most, and a
+   human will not go looking for somewhere to say it. */
+.board-content .board-ui .note {
+  margin-top: 12px;
+  color: var(--fg-muted);
+  font-size: 0.9em;
+}
+
+/* the submit bar: separated from the questions so it reads as the end */
+.board-content .board-ui .bar {
+  border-top: 1px solid var(--border-subtle);
+  margin-top: 22px;
+  padding-top: 18px;
+}
+
+.board-content .board-ui .ok {
+  color: var(--success);
+}
+
+.board-content .board-ui .bad {
+  color: var(--error);
+}
+
+/* the label is small print; what gets typed into it is not */
+.board-content .board-ui .note textarea {
+  margin-top: 4px;
+  font-size: 1rem;
+}
+
+/* native controls keep their own chrome — the field styling above is for
+   things you type into, not things you tick */
+.board-content .board-ui input[type="radio"],
+.board-content .board-ui input[type="checkbox"] {
+  width: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  margin-right: 8px;
+  accent-color: var(--primary);
+}
+
+.board-content .board-ui button:hover:not(:disabled) {
+  border-color: var(--border-active);
+}
+
+.board-content .board-ui button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* the one action that sends. --primary against --bg stays legible in both
+   themes (light: blue on white; dark: peach on near-black). */
+.board-content .board-ui button[type="submit"] {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--bg);
+  font-weight: 600;
+  padding: 11px 22px;
+}
