@@ -211,8 +211,10 @@ export function mergeOpencodeConfig(
   if (text.trim().length === 0) {
     return `${JSON.stringify({ mcp: { board: entry } }, null, 2)}\n`;
   }
+  // opencode's own loader accepts trailing commas (verified against v2.0.16),
+  // so a config opencode runs happily must not fail our stricter parse.
   const errors: ParseError[] = [];
-  parseTree(text, errors);
+  parseTree(text, errors, { allowTrailingComma: true });
   if (errors.length > 0) {
     throw new OpencodeConfigError(
       `not valid JSONC (${errors.map((e) => printParseErrorCode(e.error)).join(", ")})`,

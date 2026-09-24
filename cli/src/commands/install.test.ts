@@ -293,6 +293,25 @@ describe("board install opencode config merge", () => {
     expect(existsSync(MCP_CONNECTOR_PATH)).toBe(true);
   });
 
+  test("mergeOpencodeConfig accepts trailing commas, as opencode does", () => {
+    const merged = mergeOpencodeConfig(
+      '{\n  // local models\n  "provider": { "ollama": {}, },\n}\n',
+      {
+        type: "local",
+        command: [MCP_CONNECTOR_COMMAND, MCP_CONNECTOR_PATH],
+        enabled: true,
+        timeout: 60000,
+        environment: { BOARD_MCP_TOKEN: "x" },
+      },
+    );
+    expect(merged).toContain("// local models");
+    const errors: ParseError[] = [];
+    const parsed = parse(merged, errors, { allowTrailingComma: true });
+    expect(errors).toEqual([]);
+    expect(parsed.mcp.board.environment.BOARD_MCP_TOKEN).toBe("x");
+    expect(parsed.provider).toEqual({ ollama: {} });
+  });
+
   test("mergeOpencodeConfig rejects invalid JSONC with a parse-error message", () => {
     try {
       mergeOpencodeConfig('{ "mcp": }', {
