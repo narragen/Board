@@ -20,6 +20,7 @@ import {
   MCP_CONNECTOR_PATH,
   mergeOpencodeConfig,
   OpencodeConfigError,
+  opencodeConfigPath,
   runInstallCommand,
 } from "./install.ts";
 import type { CommandIo } from "./token.ts";
@@ -152,26 +153,28 @@ describe("board install opencode config merge", () => {
         model: string;
         plugin: { "gh-pr": boolean };
         mcp: {
-          board: {
-            type: string;
-            command: string[];
-            enabled: boolean;
-            timeout: number;
-            environment: { BOARD_MCP_TOKEN: string };
+          servers: {
+            board: {
+              type: string;
+              command: string[];
+              disabled: boolean;
+              timeout: { catalog: number; execution: number };
+              environment: { BOARD_MCP_TOKEN: string };
+            };
           };
         };
       };
       expect(errors).toEqual([]);
       expect(config.model).toBe("anthropic/claude-opus-4");
       expect(config.plugin["gh-pr"]).toBe(true);
-      const board = config.mcp.board;
+      const board = config.mcp.servers.board;
       expect(board.type).toBe("local");
       expect(board.command).toEqual([
         MCP_CONNECTOR_COMMAND,
         MCP_CONNECTOR_PATH,
       ]);
-      expect(board.enabled).toBe(true);
-      expect(board.timeout).toBe(60000);
+      expect(board.disabled).toBe(false);
+      expect(board.timeout).toEqual({ catalog: 60000, execution: 60000 });
       const token = tokenLines(out)[0];
       expect(token).toBeDefined();
       expect(board.environment.BOARD_MCP_TOKEN).toBe(token);
@@ -196,24 +199,29 @@ describe("board install opencode config merge", () => {
       const errors: ParseError[] = [];
       const config = parse(raw, errors) as {
         mcp: {
-          board: {
-            type: string;
-            command: string[];
-            enabled: boolean;
-            timeout: number;
-            environment: { BOARD_MCP_TOKEN: string };
+          servers: {
+            board: {
+              type: string;
+              command: string[];
+              disabled: boolean;
+              timeout: { catalog: number; execution: number };
+              environment: { BOARD_MCP_TOKEN: string };
+            };
           };
         };
       };
       expect(errors).toEqual([]);
-      expect(config.mcp.board.type).toBe("local");
-      expect(config.mcp.board.command).toEqual([
+      expect(config.mcp.servers.board.type).toBe("local");
+      expect(config.mcp.servers.board.command).toEqual([
         MCP_CONNECTOR_COMMAND,
         MCP_CONNECTOR_PATH,
       ]);
-      expect(config.mcp.board.enabled).toBe(true);
-      expect(config.mcp.board.timeout).toBe(60000);
-      expect(config.mcp.board.environment.BOARD_MCP_TOKEN).toBe(
+      expect(config.mcp.servers.board.disabled).toBe(false);
+      expect(config.mcp.servers.board.timeout).toEqual({
+        catalog: 60000,
+        execution: 60000,
+      });
+      expect(config.mcp.servers.board.environment.BOARD_MCP_TOKEN).toBe(
         tokenLines(out)[0],
       );
       db.close();
@@ -257,18 +265,21 @@ describe("board install opencode config merge", () => {
       const errors: ParseError[] = [];
       const config = parse(raw, errors) as {
         mcp: {
-          board: {
-            type: string;
-            url?: string;
-            headers?: unknown;
-            command: string[];
-            timeout: number;
-            environment: { BOARD_MCP_TOKEN: string };
+          board?: unknown;
+          servers: {
+            board: {
+              type: string;
+              url?: string;
+              headers?: unknown;
+              command: string[];
+              timeout: { catalog: number; execution: number };
+              environment: { BOARD_MCP_TOKEN: string };
+            };
           };
         };
       };
       expect(errors).toEqual([]);
-      const board = config.mcp.board;
+      const board = config.mcp.servers.board;
       expect(board.type).toBe("local");
       expect(board.command).toEqual([
         MCP_CONNECTOR_COMMAND,
@@ -276,8 +287,10 @@ describe("board install opencode config merge", () => {
       ]);
       expect(board.url).toBeUndefined();
       expect(board.headers).toBeUndefined();
-      expect(board.timeout).toBe(60000);
+      expect(board.timeout).toEqual({ catalog: 60000, execution: 60000 });
       expect(board.environment.BOARD_MCP_TOKEN).toBe(tokenLines(out)[0]);
+      // D24: the legacy key is deleted, not left shadowed as dead config.
+      expect(config.mcp.board).toBeUndefined();
       db.close();
     });
   });
@@ -293,14 +306,79 @@ describe("board install opencode config merge", () => {
     expect(existsSync(MCP_CONNECTOR_PATH)).toBe(true);
   });
 
+  // D24 — the shape opencode v2 actually accepts. Measured against v2.0.16:
+  // a scalar `timeout` makes v2 DROP the whole server entry silently, so this
+  // assertion is the tripwire for a regression that would otherwise be
+  // invisible until someone noticed the board tools had vanished.
+  test("writes the native v2 entry shape: timeout is {catalog, execution}, never a scalar", () => {
+    const merged = mergeOpencodeConfig("{}\n", {
+      type: "local",
+      command: [MCP_CONNECTOR_COMMAND, MCP_CONNECTOR_PATH],
+      disabled: false,
+      timeout: { catalog: 60000, execution: 60000 },
+      environment: { BOARD_MCP_TOKEN: "x" },
+    });
+    const errors: ParseError[] = [];
+    const parsed = parse(merged, errors);
+    expect(errors).toEqual([]);
+    const entry = parsed.mcp.servers.board;
+    expect(typeof entry.timeout).toBe("object");
+    expect(entry.timeout).toEqual({ catalog: 60000, execution: 60000 });
+    expect(entry.disabled).toBe(false);
+    // `enabled` is v1's key; v2 strips it on load, so writing it is a no-op
+    // we would mistake for configuration.
+    expect(entry.enabled).toBeUndefined();
+  });
+
+  test("mergeOpencodeConfig deletes a legacy mcp.board while writing the native entry", () => {
+    const merged = mergeOpencodeConfig(
+      `{
+  // keep me
+  "mcp": {
+    "board": { "type": "local", "command": ["node", "/old.ts"], "enabled": true },
+    "servers": { "other": { "type": "local", "command": ["node", "/other.ts"] } }
+  }
+}
+`,
+      {
+        type: "local",
+        command: [MCP_CONNECTOR_COMMAND, MCP_CONNECTOR_PATH],
+        disabled: false,
+        timeout: { catalog: 60000, execution: 60000 },
+        environment: { BOARD_MCP_TOKEN: "fresh" },
+      },
+    );
+    expect(merged).toContain("// keep me");
+    const errors: ParseError[] = [];
+    const parsed = parse(merged, errors);
+    expect(errors).toEqual([]);
+    expect(parsed.mcp.board).toBeUndefined();
+    expect(parsed.mcp.servers.board.environment.BOARD_MCP_TOKEN).toBe("fresh");
+    // a co-resident server someone else wired is untouched
+    expect(parsed.mcp.servers.other.command).toEqual(["node", "/other.ts"]);
+  });
+
+  test("opencodeConfigPath targets the file that already exists, preferring .jsonc", () => {
+    const dir = mkdtempSync(join(tmpdir(), "board-install-cfgpath-"));
+    dirs.push(dir);
+    // fresh install: nothing there yet -> .jsonc (board writes comments)
+    expect(opencodeConfigPath(dir)).toBe(join(dir, "opencode.jsonc"));
+    // v2's own `mcp add` wrote opencode.json -> don't create a second file
+    writeFileSync(join(dir, "opencode.json"), "{}\n");
+    expect(opencodeConfigPath(dir)).toBe(join(dir, "opencode.json"));
+    // both present -> .jsonc wins
+    writeFileSync(join(dir, "opencode.jsonc"), "{}\n");
+    expect(opencodeConfigPath(dir)).toBe(join(dir, "opencode.jsonc"));
+  });
+
   test("mergeOpencodeConfig accepts trailing commas, as opencode does", () => {
     const merged = mergeOpencodeConfig(
       '{\n  // local models\n  "provider": { "ollama": {}, },\n}\n',
       {
         type: "local",
         command: [MCP_CONNECTOR_COMMAND, MCP_CONNECTOR_PATH],
-        enabled: true,
-        timeout: 60000,
+        disabled: false,
+        timeout: { catalog: 60000, execution: 60000 },
         environment: { BOARD_MCP_TOKEN: "x" },
       },
     );
@@ -308,7 +386,7 @@ describe("board install opencode config merge", () => {
     const errors: ParseError[] = [];
     const parsed = parse(merged, errors, { allowTrailingComma: true });
     expect(errors).toEqual([]);
-    expect(parsed.mcp.board.environment.BOARD_MCP_TOKEN).toBe("x");
+    expect(parsed.mcp.servers.board.environment.BOARD_MCP_TOKEN).toBe("x");
     expect(parsed.provider).toEqual({ ollama: {} });
   });
 
@@ -317,8 +395,8 @@ describe("board install opencode config merge", () => {
       mergeOpencodeConfig('{ "mcp": }', {
         type: "local",
         command: [MCP_CONNECTOR_COMMAND, MCP_CONNECTOR_PATH],
-        enabled: true,
-        timeout: 60000,
+        disabled: false,
+        timeout: { catalog: 60000, execution: 60000 },
         environment: { BOARD_MCP_TOKEN: "x" },
       });
       throw new Error("expected OpencodeConfigError");
@@ -646,7 +724,9 @@ describe("board install failure modes", () => {
       expect(err.join("\n")).toContain("<board-opencode-token>");
       // the manual fix shows the D22 local shape, not the old remote entry
       expect(err.join("\n")).toContain('"type": "local"');
-      expect(err.join("\n")).toContain('"timeout": 60000');
+      expect(err.join("\n")).toContain(
+        '"timeout": { "catalog": 60000, "execution": 60000 }',
+      );
       expect(err.join("\n")).toContain(MCP_CONNECTOR_PATH);
       expect(tokenLines(out)).toHaveLength(1);
       db.close();
@@ -811,10 +891,12 @@ describe("board install dispatch", () => {
     );
     const errors: ParseError[] = [];
     const config = parse(raw, errors) as {
-      mcp: { board: { environment: { BOARD_MCP_TOKEN: string } } };
+      mcp: { servers: { board: { environment: { BOARD_MCP_TOKEN: string } } } };
     };
     expect(errors).toEqual([]);
-    expect(config.mcp.board.environment.BOARD_MCP_TOKEN).toBe(printed[0]);
+    expect(config.mcp.servers.board.environment.BOARD_MCP_TOKEN).toBe(
+      printed[0],
+    );
   });
 
   test("subprocess: wiring from a foreign cwd still points at the repo connector (D22 repo-root derivation)", () => {
@@ -834,12 +916,12 @@ describe("board install dispatch", () => {
     );
     const errors: ParseError[] = [];
     const config = parse(raw, errors) as {
-      mcp: { board: { command: string[] } };
+      mcp: { servers: { board: { command: string[] } } };
     };
     expect(errors).toEqual([]);
     // cwd was a temp dir — only a module-location derivation can produce the
     // repo's real connector path here.
-    expect(config.mcp.board.command).toEqual([
+    expect(config.mcp.servers.board.command).toEqual([
       MCP_CONNECTOR_COMMAND,
       MCP_CONNECTOR_PATH,
     ]);

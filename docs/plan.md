@@ -99,8 +99,8 @@ Async consumption loop (documented in skill): publish → `board_get_comments?si
 **Makefile is the primary interface**: `make serve` · `make open [ID]` · `make list` · `make token add|list|revoke AGENT` · `make install` · `make test` · `make dev` (daemon + web hot-reload) · `make export ID=` / `make import FILE=` · `make up [FILE=]` / `make down [ID=]` / `make instances` (session boards, D20) — thin wrappers over the `board` CLI; no auto-spawn magic for the shared daemon (session instances are agent-managed per D20).
 
 `make install` writes, per agent:
-- **opencode** (live on this machine): `mcp` entry in `~/.config/opencode/opencode.jsonc` + skill in `~/.config/opencode/skills/` + npm plugin stub (entry shape superseded by D22 — local stdio connector; see decisions.md)
-- **claude code** (live): `claude mcp add --transport http board ...` (user scope) + skill in `~/.claude/skills/` (entry shape superseded by D22 — local stdio connector; see decisions.md)
+- **opencode** (live on this machine): `mcp` entry in `~/.config/opencode/opencode.jsonc` + skill in `~/.config/opencode/skills/` + npm plugin stub (entry shape superseded by D22 — local stdio connector — and again by D24 — opencode v2 native `mcp.servers` shape, v1 dropped; see decisions.md)
+- **claude code** (live): `claude mcp add --transport http board ...` (user scope) + skill in `~/.claude/skills/` (entry shape superseded by D22 — local stdio connector — and again by D24 — opencode v2 native `mcp.servers` shape, v1 dropped; see decisions.md)
 - **codex / pi** (not installed here): emit `.mcp.json` + `~/.agents/skills/` placement (the cross-agent dir this machine already uses); instructions written, testing deferred until installed
 
 ## Milestones (each ends runnable + verified)
