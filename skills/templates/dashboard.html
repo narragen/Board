@@ -6,38 +6,44 @@
 <title>Dashboard template</title>
 <script src="/libs/chart-4.4.9.umd.min.js"></script>
 <style>
-  :root { color-scheme: light dark; }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; padding: 28px; font-family: system-ui, sans-serif; line-height: 1.55;
-    background: #ffffff; color: #1a1a1a;
+  /* EVERY rule is scoped under #dash. Board html mounts into the host document
+     with no iframe (D18), so a bare `body`, `*`, `h1` or `:root` rule restyles
+     the board app itself — a stray `body { max-width }` here once shrank the
+     host's content column to a third of its width. Scope, always. */
+  #dash {
+    color-scheme: light dark;
+    display: block; padding: 4px 0; font-family: system-ui, sans-serif; line-height: 1.55;
+    color: #1a1a1a;
   }
+  #dash * { box-sizing: border-box; }
   @media (prefers-color-scheme: dark) {
-    body { background: #0a0a0a; color: #eeeeee; }
-    .card { border-color: #1e1e1e !important; }
+    #dash { color: #eeeeee; }
+    #dash .card { border-color: #1e1e1e !important; }
   }
-  .card {
+  #dash .card {
     border: 1px solid #dcdcdc; border-radius: 8px; padding: 20px; margin: 0 0 24px;
     max-width: 760px;
   }
-  h1 { font-size: 1.45rem; margin: 0 0 4px; }
-  h2 { font-size: 1.05rem; margin: 0 0 12px; color: #9d7cd8; }
-  .sub { color: #6b6b6b; font-size: 0.9rem; margin: 0 0 8px; }
-  canvas { max-width: 100%; }
-  .opts { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
-  .opt { display: flex; gap: 8px; align-items: center; }
-  button {
+  #dash h1 { font-size: 1.45rem; margin: 0 0 4px; }
+  #dash h2 { font-size: 1.05rem; margin: 0 0 12px; color: #9d7cd8; }
+  #dash .sub { color: #6b6b6b; font-size: 0.9rem; margin: 0 0 8px; }
+  #dash canvas { max-width: 100%; }
+  #dash .opts { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
+  #dash .opt { display: flex; gap: 8px; align-items: center; }
+  #dash button {
     font: inherit; padding: 6px 16px; border-radius: 6px; cursor: pointer;
     border: 1px solid #3b7dd8; background: #3b7dd8; color: #ffffff;
   }
-  @media (prefers-color-scheme: dark) { button { border-color: #fab283; background: #fab283; color: #0a0a0a; } }
-  .tally { margin-top: 12px; font-variant-numeric: tabular-nums; }
-  .tally div { margin: 2px 0; }
-  .bar { display: inline-block; height: 10px; border-radius: 3px; background: #5c9cf5; vertical-align: middle; margin-left: 8px; }
-  .note { font-size: 0.85rem; color: #6b6b6b; margin-top: 12px; }
+  @media (prefers-color-scheme: dark) { #dash button { border-color: #fab283; background: #fab283; color: #0a0a0a; } }
+  #dash .tally { margin-top: 12px; font-variant-numeric: tabular-nums; }
+  #dash .tally div { margin: 2px 0; }
+  #dash .bar { display: inline-block; height: 10px; border-radius: 3px; background: #5c9cf5; vertical-align: middle; margin-left: 8px; }
+  #dash .note { font-size: 0.85rem; color: #6b6b6b; margin-top: 12px; }
 </style>
 </head>
 <body>
+
+<div id="dash">
 
 <section data-ba="s-header" data-ba-label="Header">
   <div class="card">
@@ -116,5 +122,6 @@
     });
   });
 </script>
+</div>
 </body>
 </html>

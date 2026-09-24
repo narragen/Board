@@ -1,0 +1,368 @@
+<!doctype html>
+<!--
+  grill round template — see skills/grill/SKILL.md
+
+  FILL IN exactly two things:
+    1. ROUND / BOARD_ID / VERSION_N in the config block at the bottom.
+    2. The QUESTIONS array. Everything else renders itself.
+
+  Question schema (six types, no others):
+    {
+      id:      "kebab-id",           // stable across rounds; the answer key
+      n:       "Q7",                 // display number; keep numbering across rounds
+      title:   "Short question",
+      body:    "HTML. The context needed to answer.",
+      rec:     "A",                  // recommended answer — REQUIRED, never omit.
+                                     //   pick_one/ask_text: "A" · confirm: true/false
+                                     //   pick_many/rank: ["A","C"] (pick_many compares as a set)
+      why:     "HTML. Why you recommend it.",
+      type:    "pick_one" | "pick_many" | "confirm" | "rank" | "ask_text" | "ask_image",
+      options: [{k: "A", label: "…", why: "one-line consequence"}]   // not for ask_text/ask_image
+    }
+
+  Answers post as ONE comment carrying JSON keyed by question id.
+
+  TWO RULES:
+    - Every CSS rule is scoped under #grill. Board html mounts into the host
+      document with no iframe (D18): a bare `body`/`h1`/`*`/`:root` rule restyles
+      the board app itself.
+    - The submit call lives HERE and nowhere else. Do not hand-roll it in a board —
+      when the narrow answer channel lands (NAR-1862) this is the only file to change.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Grill round</title>
+<style>
+  #grill{
+    --bg:#fcfcfc; --panel:#fff; --fg:#17181a; --muted:#5d6166; --line:#dfe1e4;
+    --accent:#2b5fd9; --accent-soft:#eaf0fe; --ok:#0a7c42; --bad:#b3261e;
+    --done:#0a7c42; --done-bg:#edf7f1;
+    display:block; color:var(--fg);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    #grill{
+      --bg:#0f1012; --panel:#17191c; --fg:#e8eaed; --muted:#9aa0a6; --line:#2c2f34;
+      --accent:#7aa2f7; --accent-soft:#1b2436; --ok:#4ec77f; --bad:#f2846b;
+      --done:#4ec77f; --done-bg:#10201a;
+    }
+  }
+  #grill *{box-sizing:border-box}
+  #grill h1{font-size:1.45rem;line-height:1.25;margin:0 0 6px}
+  #grill .sub{color:var(--muted);margin:0 0 18px}
+  #grill .settled{background:var(--done-bg);border:1px solid var(--line);
+    border-left:3px solid var(--done);border-radius:6px;padding:11px 13px;margin:0 0 16px;font-size:13.5px}
+  #grill .settled b{color:var(--done)}
+  #grill .settled ul{margin:6px 0 0;padding-left:20px}
+  #grill .q{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;margin:0 0 14px}
+  #grill .qh{display:flex;gap:8px;align-items:baseline;margin:0 0 8px}
+  #grill .qn{font-weight:700;color:var(--accent);font-variant-numeric:tabular-nums;flex:none}
+  #grill .qt{font-weight:650}
+  #grill .qb{margin:0 0 10px}
+  #grill .qb code{background:var(--accent-soft);padding:1px 5px;border-radius:4px;font-size:.9em}
+  #grill .rec{background:var(--accent-soft);border-radius:6px;padding:9px 11px;margin:0 0 12px;font-size:14px}
+  #grill .rec b{color:var(--accent)}
+  #grill .opts{display:flex;flex-direction:column;gap:7px}
+  #grill button.opt{text-align:left;padding:10px 12px;border:1px solid var(--line);border-radius:7px;
+    background:transparent;color:inherit;font:inherit;cursor:pointer;transition:border-color .12s,background .12s}
+  #grill button.opt:hover{border-color:var(--accent)}
+  #grill button.opt[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft);
+    box-shadow:inset 0 0 0 1px var(--accent)}
+  #grill button.opt .k{font-weight:700;margin-right:7px;color:var(--accent)}
+  #grill button.opt .why{display:block;color:var(--muted);font-size:13px;margin-top:2px}
+  #grill .rankrow{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--line);
+    border-radius:7px;margin:0 0 6px}
+  #grill .rankrow .pos{font-weight:700;color:var(--accent);min-width:1.4em}
+  #grill .rankrow button{margin-left:auto;padding:3px 9px;border:1px solid var(--line);border-radius:5px;
+    background:transparent;color:inherit;font:inherit;cursor:pointer}
+  #grill .notewrap{margin-top:11px}
+  #grill .notelabel{display:block;font-size:13px;color:var(--muted);margin-bottom:4px}
+  #grill textarea,#grill input[type=file]{width:100%;padding:9px;border:1px solid var(--line);
+    border-radius:6px;background:var(--bg);color:inherit;font:inherit;resize:vertical}
+  #grill .bar{border-top:1px solid var(--line);padding:18px 0 6px;margin-top:22px}
+  #grill .willsend{font-size:13.5px;color:var(--muted);margin:0 0 10px}
+  #grill .willsend b{color:var(--fg)}
+  #grill #send{padding:12px 22px;border:0;border-radius:7px;background:var(--accent);color:#fff;
+    font:inherit;font-weight:600;cursor:pointer}
+  #grill #send:disabled{opacity:.5;cursor:not-allowed}
+  #grill #out{margin-top:12px;padding:11px;border:1px solid var(--line);border-radius:7px;
+    font-size:13px;white-space:pre-wrap;color:var(--muted)}
+  #grill #out.ok{color:var(--ok);border-color:var(--ok)}
+  #grill #out.bad{color:var(--bad);border-color:var(--bad)}
+  @media (max-width:520px){ #grill h1{font-size:1.25rem} }
+</style>
+</head>
+<body>
+<div id="grill">
+  <h1 id="g-title">Grill round</h1>
+  <p class="sub" id="g-sub"></p>
+  <div class="settled" id="g-settled" hidden></div>
+  <div id="g-questions"></div>
+  <div class="bar">
+    <p class="willsend">The button below sends <b>everything on this page at once</b> —
+      every answer and every note, as a single comment. Nothing is sent until you press it.
+      <span id="g-count"></span></p>
+    <button id="send" type="button" disabled>Submit</button>
+  </div>
+  <div id="out">Nothing submitted yet.</div>
+</div>
+
+<script>
+// ---------------------------------------------------------------- CONFIG
+var ROUND = 1;
+var BOARD_ID = "BOARD_ID_HERE";
+var VERSION_N = 1;
+var TITLE = "Grill round 1 — <topic>";
+var SUBTITLE = "<n> decisions. Each carries my recommendation. Click, add a note if I'm wrong, submit once.";
+var SETTLED = [];          // e.g. ["<b>Auth:</b> prototype path (A)"] — omit in round 1
+var QUESTIONS = [
+  {
+    id: "example", n: "Q1", type: "pick_one",
+    title: "Replace this with a real question",
+    body: "Context the human needs, as HTML.",
+    rec: "A", why: "Why you recommend A.",
+    options: [
+      {k: "A", label: "First option", why: "Consequence of choosing it."},
+      {k: "B", label: "Second option", why: "Consequence of choosing it."}
+    ]
+  }
+];
+// ------------------------------------------------------------- /CONFIG
+
+(() => {
+  var answers = {}, ranks = {};
+  var host = document.getElementById("g-questions");
+  var out = document.getElementById("out");
+  var send = document.getElementById("send");
+  var count = document.getElementById("g-count");
+
+  document.getElementById("g-title").textContent = TITLE;
+  document.getElementById("g-sub").textContent = SUBTITLE;
+  if (SETTLED.length) {
+    const box = document.getElementById("g-settled");
+    box.hidden = false;
+    box.innerHTML = "<b>Settled already — not re-litigating:</b><ul>"
+      + SETTLED.map((s) => `<li>${s}</li>`).join("") + "</ul>";
+  }
+
+  function el(tag, cls, html) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (html !== undefined) e.innerHTML = html;
+    return e;
+  }
+
+  function refresh() {
+    var n = QUESTIONS.filter((q) => answered(q)).length;
+    count.textContent = `${n} of ${QUESTIONS.length} answered.`;
+    send.disabled = n === 0;
+  }
+
+  function answered(q) {
+    var a = answers[q.id];
+    if (q.type === "pick_many") return Array.isArray(a) && a.length > 0;
+    if (q.type === "rank") return true;               // an order always exists
+    return a !== undefined && a !== null && a !== "";
+  }
+
+  QUESTIONS.forEach((q) => {
+    var card = el("div", "q");
+    var head = el("div", "qh");
+    head.appendChild(el("span", "qn", q.n));
+    head.appendChild(el("span", "qt", q.title));
+    card.appendChild(head);
+    card.appendChild(el("p", "qb", q.body));
+    if (q.rec) {
+      card.appendChild(el("div", "rec",
+        `<b>➡️ Recommended: ${q.rec}.</b> ${q.why || ""}`));
+    }
+
+    if (q.type === "pick_one" || q.type === "pick_many" || q.type === "confirm") {
+      const opts = el("div", "opts");
+      (q.options || []).forEach((o) => {
+        var b = el("button", "opt",
+          '<span class="k">' + o.k + "</span>" + o.label
+          + (o.why ? `<span class="why">${o.why}</span>` : ""));
+        b.type = "button";
+        b.setAttribute("aria-pressed", "false");
+        b.addEventListener("click", () => {
+          if (q.type === "pick_many") {
+            const on = b.getAttribute("aria-pressed") === "true";
+            b.setAttribute("aria-pressed", on ? "false" : "true");
+            answers[q.id] = Array.prototype.filter
+              .call(opts.querySelectorAll('button[aria-pressed="true"]'), Boolean)
+              .map((x) => x.querySelector(".k").textContent);
+          } else {
+            Array.prototype.forEach.call(opts.querySelectorAll("button"), (x) => {
+              x.setAttribute("aria-pressed", "false");
+            });
+            b.setAttribute("aria-pressed", "true");
+            answers[q.id] = q.type === "confirm" ? o.k === "yes" : o.k;
+          }
+          refresh();
+        });
+        opts.appendChild(b);
+      });
+      card.appendChild(opts);
+    } else if (q.type === "rank") {
+      ranks[q.id] = (q.options || []).map((o) => o.k);
+      const list = el("div", "");
+      const draw = () => {
+        list.innerHTML = "";
+        ranks[q.id].forEach((k, i) => {
+          var o = q.options.find((x) => x.k === k) || {k: k, label: k};
+          var row = el("div", "rankrow",
+            `<span class="pos">${i + 1}.</span><span>${o.label}</span>`);
+          var up = el("button", "", "↑");
+          up.type = "button";
+          up.disabled = i === 0;
+          up.addEventListener("click", () => {
+            var a = ranks[q.id];
+            a.splice(i - 1, 0, a.splice(i, 1)[0]);
+            answers[q.id] = a.slice();
+            draw();
+            refresh();
+          });
+          row.appendChild(up);
+          list.appendChild(row);
+        });
+      };
+      draw();
+      answers[q.id] = ranks[q.id].slice();
+      card.appendChild(list);
+    } else if (q.type === "ask_text") {
+      const ta = el("textarea");
+      ta.rows = 3;
+      ta.placeholder = "Your answer";
+      ta.addEventListener("input", () => {
+        answers[q.id] = ta.value.trim() || null;
+        refresh();
+      });
+      card.appendChild(ta);
+    } else if (q.type === "ask_image") {
+      const fi = document.createElement("input");
+      fi.type = "file";
+      fi.accept = "image/png,image/jpeg,image/gif,image/webp,image/svg+xml";
+      fi.addEventListener("change", async () => {
+        var f = fi.files?.[0];
+        if (!f) return;
+        out.className = "";
+        out.textContent = `uploading ${f.name}…`;
+        try {
+          const r = await fetch(`/api/assets?board_id=${encodeURIComponent(BOARD_ID)}`, {
+            method: "POST",
+            headers: {"content-type": f.type, "authorization": `Bearer ${session()}`},
+            body: await f.arrayBuffer()
+          });
+          const j = await r.json();
+          if (!r.ok) throw new Error(j?.error ? j.error.message : `HTTP ${r.status}`);
+          answers[q.id] = {asset_id: j.id || j.asset_id, filename: f.name};
+          out.className = "ok";
+          out.textContent = `uploaded ${f.name}`;
+          refresh();
+        } catch (e) {
+          out.className = "bad";
+          out.textContent = `upload failed: ${e}`;
+        }
+      });
+      card.appendChild(fi);
+    }
+
+    var nw = el("div", "notewrap");
+    var lab = el("label", "notelabel", "Note (optional) — sent with your answers below");
+    var note = el("textarea");
+    note.rows = 2;
+    note.id = `note-${q.id}`;
+    lab.htmlFor = note.id;
+    nw.appendChild(lab);
+    nw.appendChild(note);
+    card.appendChild(nw);
+
+    host.appendChild(card);
+  });
+
+  // Comparing an answer to a recommendation is type-aware, because a naive
+  // String() compare reports FALSE overrules: a confirm answer is a boolean
+  // against a "yes"/"no" rec, and pick_many is a set, not an ordered string.
+  // A wrong "you were overruled" is worse than none — it misleads the agent
+  // reading the round back, which is the exact error this format exists to remove.
+  function matchesRec(q, chose) {
+    if (q.rec == null || chose == null) return null;
+    if (q.type === "confirm") {
+      return chose === (q.rec === true || q.rec === "yes");
+    }
+    if (q.type === "pick_many") {
+      const want = Array.isArray(q.rec) ? q.rec : [q.rec];
+      const got = Array.isArray(chose) ? chose : [chose];
+      return want.length === got.length && want.every((k) => got.includes(k));
+    }
+    if (q.type === "rank") {
+      if (!Array.isArray(q.rec)) return null;
+      return q.rec.length === chose.length && q.rec.every((k, i) => chose[i] === k);
+    }
+    return String(chose) === String(q.rec);
+  }
+
+  // The ONE place a board talks to the API as the human. See the header note.
+  function session() {
+    try {
+      return localStorage.getItem("board.session");
+    } catch (e) {
+      return null;
+    }
+  }
+
+  send.addEventListener("click", async () => {
+    var payload = {}, deltas = [];
+    QUESTIONS.forEach((q) => {
+      var note = document.getElementById(`note-${q.id}`);
+      var chose = answers[q.id] === undefined ? null : answers[q.id];
+      var agreed = matchesRec(q, chose);
+      payload[q.id] = {
+        chose: chose,
+        agreed_with_recommendation: agreed,
+        note: note?.value.trim() ? note.value.trim() : null
+      };
+      if (agreed === false) {
+        deltas.push(`${q.id}: chose ${JSON.stringify(chose)}, recommended ${JSON.stringify(q.rec)}`);
+      }
+    });
+
+    var body = "## Round " + ROUND + " answers\n\n"
+      + (deltas.length
+          ? `**Overruled my recommendation on:** ${deltas.join("; ")}\n\n`
+          : "**Agreed with every recommendation.**\n\n")
+      + "```json\n" + JSON.stringify({round: ROUND, answers: payload}, null, 2) + "\n```";
+
+    out.className = "";
+    out.textContent = "submitting…";
+    send.disabled = true;
+    try {
+      const res = await fetch(`/api/boards/${BOARD_ID}/comments`, {
+        method: "POST",
+        headers: {"content-type": "application/json", "authorization": `Bearer ${session()}`},
+        body: JSON.stringify({anchor: {type: "board"}, body: body, version_n: VERSION_N})
+      });
+      if (res.ok) {
+        out.className = "ok";
+        out.textContent = "Submitted — answers and notes are in. Nothing else to press.";
+      } else {
+        out.className = "bad";
+        out.textContent = "HTTP " + res.status + " — " + (await res.text()).slice(0, 240)
+          + "\n\nFallback: reply in a normal board comment.";
+        send.disabled = false;
+      }
+    } catch (e) {
+      out.className = "bad";
+      out.textContent = `Request failed: ${e}\n\nFallback: reply in a normal board comment.`;
+      send.disabled = false;
+    }
+  });
+
+  refresh();
+})();
+</script>
+</body>
+</html>

@@ -236,3 +236,31 @@ board open <board_id>                      # mint the one-time human link
 - Boards are markdown: headings, tables, and mermaid diagrams render in the UI.
 - One topic per board — split unrelated work into separate boards.
 - Label versions: lead with a line like `v2 — trimmed rollout section per feedback` so the human sees what changed and why.
+
+## html boards: scope your CSS
+
+An html board mounts into the **host document with no iframe** (D18) — its scripts and styles are in the board app's own origin and document. So a bare element or `:root` selector restyles the app itself, silently:
+
+```html
+<style>
+  body { max-width: 760px }   /* WRONG — shrinks the whole board app */
+  :root { --bg: #fff }        /* WRONG — overrides the host's own variables */
+</style>
+```
+
+That exact `body` rule once cut the host's content column from 1169px to 312px, and it reads as a Board layout bug rather than a board-content bug.
+
+Wrap the board in one element and scope every rule to it:
+
+```html
+<style>
+  #myboard { display:block; color:#17181a }
+  #myboard * { box-sizing:border-box }
+  #myboard h1 { font-size:1.45rem }
+</style>
+<div id="myboard">…</div>
+```
+
+`skills/templates/dashboard.html` and `skills/templates/grill-round.html` both do this — start from one of them.
+
+**Interactive boards** (a human clicking answers back to you) are the `grill` skill's job, not a thing to hand-roll: `skills/grill/SKILL.md` owns the question schema and the submit call.

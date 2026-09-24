@@ -21,6 +21,7 @@ import {
   mergeOpencodeConfig,
   OpencodeConfigError,
   opencodeConfigPath,
+  reportSkillCopyFailure,
   runInstallCommand,
 } from "./install.ts";
 import type { CommandIo } from "./token.ts";
@@ -525,7 +526,7 @@ describe("board install tokens", () => {
 });
 
 describe("board install wiring", () => {
-  test("copies the skill into opencode, claude, and ~/.agents skill dirs", () => {
+  test("copies every shipped skill into opencode, claude, and ~/.agents skill dirs", () => {
     withIsolatedEnv(({ home, xdg }) => {
       const db = freshDb();
       const { out, io } = capture();
@@ -537,21 +538,58 @@ describe("board install wiring", () => {
         claudeOnPath: NO_CLAUDE,
       });
       expect(code).toBe(0);
-      const expected = readFileSync(
-        join(import.meta.dir, "..", "..", "..", "skills", "board", "SKILL.md"),
-        "utf8",
-      );
-      for (const dest of [
-        join(xdg, "opencode", "skills", "board", "SKILL.md"),
-        join(home, ".claude", "skills", "board", "SKILL.md"),
-        join(home, ".agents", "skills", "board", "SKILL.md"),
-      ]) {
-        expect(readFileSync(dest, "utf8")).toBe(expected);
+      // D25: board ships two skills — the review loop and the scoping method
+      // that drives it. Both land in every agent's skills root.
+      for (const name of ["board", "grill"]) {
+        const expected = readFileSync(
+          join(import.meta.dir, "..", "..", "..", "skills", name, "SKILL.md"),
+          "utf8",
+        );
+        for (const root of [
+          join(xdg, "opencode", "skills"),
+          join(home, ".claude", "skills"),
+          join(home, ".agents", "skills"),
+        ]) {
+          expect(readFileSync(join(root, name, "SKILL.md"), "utf8")).toBe(
+            expected,
+          );
+        }
       }
-      // one skill copy per wired agent (codex + pi share ~/.agents/skills)
-      expect(out.filter((line) => line.startsWith("skill: "))).toHaveLength(4);
+      // 2 skills x 4 wired agents, minus the shared ~/.agents root (codex + pi)
+      expect(out.filter((line) => line.startsWith("skill: "))).toHaveLength(8);
       db.close();
     });
+  });
+
+  // D25: a read-only skills dir means a container — agent sandboxes mount the
+  // host's skills dir read-only. "Copy it there manually" is advice the human
+  // cannot follow either, so the EROFS branch names the real fix instead.
+  test("EROFS names the container fix; other errors keep the manual advice", () => {
+    const rofs = capture();
+    reportSkillCopyFailure(
+      "/repo/skills/board/SKILL.md",
+      "/home/node/.claude/skills/board/SKILL.md",
+      new Error(
+        "EROFS: read-only file system, mkdir '/home/node/.claude/skills/board'",
+      ),
+      rofs.io,
+    );
+    const text = rofs.err.join("\n");
+    expect(text).toContain("read-only filesystem");
+    expect(text).toContain("you are running inside a container");
+    expect(text).toContain("run `make install` on your HOST machine");
+    expect(text).not.toContain("copy it there manually");
+
+    // a plain permissions error IS fixable by hand — keep the old advice
+    const other = capture();
+    reportSkillCopyFailure(
+      "/repo/skills/grill/SKILL.md",
+      "/somewhere/grill/SKILL.md",
+      new Error("EACCES: permission denied"),
+      other.io,
+    );
+    expect(other.err.join("\n")).toContain("copy it there manually");
+    expect(other.err.join("\n")).not.toContain("inside a container");
   });
 
   test("claude on PATH runs `claude mcp add` with verified flags and no manual fallback", () => {

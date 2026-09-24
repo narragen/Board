@@ -139,15 +139,14 @@ function defaultRunClaude(args: string[]): number {
   return proc.exitCode ?? 1;
 }
 
-const REPO_SKILL = join(
-  import.meta.dir,
-  "..",
-  "..",
-  "..",
-  "skills",
-  "board",
-  "SKILL.md",
-);
+// Every skill board ships. `board` is the review loop; `grill` is the scoping
+// method that drives it (D25). Both land in the same per-agent skills root, so
+// adding a third is one entry here.
+const SKILL_NAMES = ["board", "grill"] as const;
+
+function repoSkillPath(name: string): string {
+  return join(import.meta.dir, "..", "..", "..", "skills", name, "SKILL.md");
+}
 
 function configHome(): string {
   const xdg = process.env.XDG_CONFIG_HOME;
@@ -167,18 +166,50 @@ function homeDir(): string {
   return homedir();
 }
 
-function copySkill(dest: string, io: CommandIo): boolean {
-  try {
-    mkdirSync(dirname(dest), { recursive: true });
-    copyFileSync(REPO_SKILL, dest);
-    io.stdout(`skill: ${dest}`);
-    return true;
-  } catch (err) {
-    io.stderr(
-      `board: could not copy the board skill to ${dest} (${err instanceof Error ? err.message : String(err)}); copy ${REPO_SKILL} there manually`,
-    );
-    return false;
+// Copies every shipped skill into one agent's skills root (the directory that
+// holds <name>/SKILL.md). Returns false if any copy failed — the caller turns
+// that into a non-zero exit.
+function copySkills(skillsRoot: string, io: CommandIo): boolean {
+  let ok = true;
+  for (const name of SKILL_NAMES) {
+    const src = repoSkillPath(name);
+    const dest = join(skillsRoot, name, "SKILL.md");
+    try {
+      mkdirSync(dirname(dest), { recursive: true });
+      copyFileSync(src, dest);
+      io.stdout(`skill: ${dest}`);
+    } catch (err) {
+      ok = false;
+      reportSkillCopyFailure(src, dest, err, io);
+    }
   }
+  return ok;
+}
+
+// A read-only skills directory means a container: agentbox and friends mount the
+// HOST's ~/.claude/skills read-only, so nothing inside the box can write there —
+// and "copy it manually" is advice the human cannot follow either (D25). Name the
+// real fix instead: install from the host, which every box then inherits.
+export function reportSkillCopyFailure(
+  src: string,
+  dest: string,
+  err: unknown,
+  io: CommandIo,
+): void {
+  const message = err instanceof Error ? err.message : String(err);
+  if (message.includes("EROFS")) {
+    io.stderr(
+      `board: ${dest} is on a read-only filesystem — you are running inside a container.\n` +
+        `  Agent sandboxes mount the host's skills directory read-only, so no in-container\n` +
+        `  install can write there, manually or otherwise.\n` +
+        `  Fix: run \`make install\` on your HOST machine. Every container you start\n` +
+        `  afterwards inherits the skill through that same mount.`,
+    );
+    return;
+  }
+  io.stderr(
+    `board: could not copy ${src} to ${dest} (${message}); copy it there manually`,
+  );
 }
 
 export class OpencodeConfigError extends Error {
@@ -267,13 +298,7 @@ export function opencodeConfigPath(dir: string): string {
 
 function wireOpencode(token: string, io: CommandIo): boolean {
   const configPath = opencodeConfigPath(join(configHome(), "opencode"));
-  const skillDest = join(
-    configHome(),
-    "opencode",
-    "skills",
-    "board",
-    "SKILL.md",
-  );
+  const skillsRoot = join(configHome(), "opencode", "skills");
   const entry: BoardMcpEntry = {
     type: "local",
     command: [MCP_CONNECTOR_COMMAND, MCP_CONNECTOR_PATH],
@@ -332,7 +357,7 @@ function wireOpencode(token: string, io: CommandIo): boolean {
       io.stderr(`  (${manualTokenNote("opencode")})`);
     }
   }
-  return copySkill(skillDest, io) && ok;
+  return copySkills(skillsRoot, io) && ok;
 }
 
 function printClaudeManual(io: CommandIo): void {
@@ -402,10 +427,7 @@ function wireClaude(
     // Guidance, not a failure: a machine without claude installed is fine.
     printClaudeManual(io);
   }
-  return (
-    copySkill(join(homeDir(), ".claude", "skills", "board", "SKILL.md"), io) &&
-    ok
-  );
+  return copySkills(join(homeDir(), ".claude", "skills"), io) && ok;
 }
 
 function wireTomlAgent(agent: Agent, io: CommandIo): boolean {
@@ -423,10 +445,7 @@ function wireTomlAgent(agent: Agent, io: CommandIo): boolean {
   io.stdout(`  args = ["${MCP_CONNECTOR_PATH}"]`);
   io.stdout(`  env = { "BOARD_MCP_TOKEN" = "<board-${agent}-token>" }`);
   io.stdout(`  (${manualTokenNote(agent)})`);
-  return copySkill(
-    join(homeDir(), ".agents", "skills", "board", "SKILL.md"),
-    io,
-  );
+  return copySkills(join(homeDir(), ".agents", "skills"), io);
 }
 
 function wireAgent(
