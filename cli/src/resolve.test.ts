@@ -1,133 +1,32 @@
 // D20 wave-2 contract tests: instance RESOLUTION across the CLI — every case
-// runs the real CLI as a subprocess (the cli/src/instances.test.ts pattern)
-// with temp BOARD_DATA_DIR everywhere — never the real ~/.board. Spawned
-// instance daemons are tracked via instance.json's pid and force-killed in
-// afterAll so a failing assertion cannot leak a process.
+// runs the real CLI as a subprocess with temp BOARD_DATA_DIR everywhere,
+// never the real ~/.board. The subprocess driver, the `board up` stdout
+// parser and the spawned-daemon tracking come from cli/test/harness.ts (one
+// copy, shared with instances/resume and the smoke); tracked daemons are
+// force-killed in afterAll so a failing assertion cannot leak a process.
 import { afterAll, describe, expect, test } from "bun:test";
-import {
-  existsSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { openDb } from "../../server/src/db.ts";
+import {
+  awaitGone,
+  boardIdFrom,
+  createCliHarness,
+  parseUp,
+  type UpOutput,
+} from "../test/harness.ts";
 import {
   instancePaths,
   readInstanceEntry,
   writeInstanceEntry,
 } from "./instances.ts";
 
-const dirs: string[] = [];
-const spawned: Array<{ pid: number; dataDir: string }> = [];
+const harness = createCliHarness("board-cli-resolve-test-");
+const { freshDir, runCli, trackInstance } = harness;
 
-afterAll(async () => {
-  for (const { pid } of spawned) {
-    if (existsSync(`/proc/${pid}`)) {
-      try {
-        process.kill(pid, "SIGKILL");
-      } catch {
-        // already gone
-      }
-    }
-  }
-  for (const { dataDir } of spawned) {
-    rmSync(dataDir, { recursive: true, force: true });
-  }
-  for (const dir of dirs) {
-    rmSync(dir, { recursive: true, force: true });
-  }
+afterAll(() => {
+  harness.cleanup();
 });
-
-function freshDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "board-cli-resolve-test-"));
-  dirs.push(dir);
-  return dir;
-}
-
-interface Proc {
-  exitCode: number;
-  stdout: string;
-  stderr: string;
-}
-
-async function runCli(
-  args: string[],
-  env: Record<string, string> = {},
-): Promise<Proc> {
-  const proc = Bun.spawn(
-    [process.execPath, join(import.meta.dir, "main.ts"), ...args],
-    { env, stdout: "pipe", stderr: "pipe" },
-  );
-  const [exitCode, stdout, stderr] = await Promise.all([
-    proc.exited,
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ]);
-  return { exitCode: exitCode ?? -1, stdout, stderr };
-}
-
-interface UpOutput {
-  id: string;
-  url: string;
-  token: string;
-  envPath: string;
-  human?: string;
-}
-
-function parseUp(stdout: string): UpOutput {
-  const head =
-    /instance (s-[0-9A-Za-z]{10}) listening on (http:\/\/127\.0\.0\.1:\d+)/.exec(
-      stdout,
-    );
-  const token =
-    /^agent token \(print once — it is not recoverable\): (\S+)$/m.exec(
-      stdout,
-    )?.[1];
-  const envPath =
-    /^credentials env file \(agent shells: source it\): (.+)$/m.exec(
-      stdout,
-    )?.[1];
-  const human = /^human link: (.+)$/m.exec(stdout)?.[1];
-  if (head === null || token === undefined || envPath === undefined) {
-    throw new Error(`could not parse up output:\n${stdout}`);
-  }
-  return { id: head[1] ?? "", url: head[2] ?? "", token, envPath, human };
-}
-
-function boardIdFrom(up: UpOutput): string {
-  const id = /#\/boards\/([0-9A-Za-z]{10})/.exec(up.human ?? "")?.[1];
-  if (id === undefined) {
-    throw new Error(`no human link board id in up output:\n${up.human}`);
-  }
-  return id;
-}
-
-// Track a live instance for afterAll force-kill, reading the pid back from
-// the registry (the CLI output deliberately does not print the pid).
-function trackInstance(
-  dir: string,
-  up: UpOutput,
-): { pid: number; dataDir: string } {
-  const entry = JSON.parse(
-    readFileSync(instancePaths(dir, up.id).json, "utf8"),
-  ) as { pid: number; dataDir: string };
-  spawned.push({ pid: entry.pid, dataDir: entry.dataDir });
-  return entry;
-}
-
-async function awaitGone(pid: number, timeoutMs = 5000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (existsSync(`/proc/${pid}`)) {
-    if (Date.now() > deadline) {
-      throw new Error(`pid ${pid} still alive after ${timeoutMs}ms`);
-    }
-    await Bun.sleep(50);
-  }
-}
 
 const MD =
   "# Resolution fixture\n\n## Section one\n\nThe resolver must find this board.\n";

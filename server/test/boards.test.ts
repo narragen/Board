@@ -82,6 +82,17 @@ async function publishOk(
   return (await res.json()) as Version;
 }
 
+async function unresolvedCount(
+  s: TestServer,
+  token: string,
+  boardId: string,
+): Promise<number> {
+  const res = await s.api.get(`/api/boards/${boardId}`, { token });
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as { unresolved_comments: number };
+  return body.unresolved_comments;
+}
+
 describe("auth", () => {
   test("POST /api/boards without a token is 401", async () => {
     const s = server();
@@ -321,7 +332,13 @@ describe("GET /api/boards/:id", () => {
       token,
     });
     expect(beforePublish.status).toBe(200);
-    expect(await beforePublish.json()).toEqual({ board, versions: [] });
+    // `board` stays the plain Board (board_get returns the same shape over MCP);
+    // the count rides the envelope — F15
+    expect(await beforePublish.json()).toEqual({
+      board,
+      versions: [],
+      unresolved_comments: 0,
+    });
 
     await publishOk(s, token, board.id, {
       format: "markdown",
@@ -336,6 +353,7 @@ describe("GET /api/boards/:id", () => {
     const body = (await afterPublish.json()) as {
       board: Board;
       versions: VersionMeta[];
+      unresolved_comments: number;
     };
     expect(body.board.id).toBe(board.id);
     expect(body.board.current_version).toBe(1);
@@ -347,6 +365,80 @@ describe("GET /api/boards/:id", () => {
     expect(meta.created_by).toBe("boards-agent");
     expect("content" in meta).toBe(false);
     expect("source_md" in meta).toBe(false);
+  });
+
+  // F15: the count is the server's own rule (countUnresolvedRoots) so clients
+  // — `board status` in the CLI above all — never re-derive it and drift.
+  test("unresolved_comments counts root threads only, and drops on resolve", async () => {
+    const { s, token } = await setup();
+    const board = await makeBoard(s, token, { title: "Counted" });
+    await publishOk(s, token, board.id, {
+      format: "markdown",
+      content: MD_V1,
+      expected_version: 0,
+    });
+
+    const rootRes = await s.api.post(
+      `/api/boards/${board.id}/comments`,
+      {
+        anchor: { type: "board" },
+        body: "needs a second look",
+        version_n: 1,
+      },
+      { token },
+    );
+    expect(rootRes.status).toBe(201);
+    const root = (await rootRes.json()) as { id: string };
+    expect(await unresolvedCount(s, token, board.id)).toBe(1);
+
+    // a reply is not a thread — the count is roots only
+    const replyRes = await s.api.post(
+      `/api/comments/${root.id}/reply`,
+      { body: "looking" },
+      { token },
+    );
+    expect(replyRes.status).toBe(201);
+    expect(await unresolvedCount(s, token, board.id)).toBe(1);
+
+    const resolveRes = await s.api.post(
+      `/api/comments/${root.id}/resolve`,
+      {},
+      { token },
+    );
+    expect(resolveRes.status).toBe(200);
+    expect(await unresolvedCount(s, token, board.id)).toBe(0);
+  });
+
+  // The seam a mocked unit test on either side cannot see: the detail route's
+  // envelope count and the list route's column must be the same number for the
+  // same board, or `board status` and `board list` disagree in front of a human.
+  test("unresolved_comments agrees with the list route for the same board", async () => {
+    const { s, token } = await setup();
+    const board = await makeBoard(s, token, { title: "Agreeing" });
+    await publishOk(s, token, board.id, {
+      format: "markdown",
+      content: MD_V1,
+      expected_version: 0,
+    });
+    for (const body of ["one", "two"]) {
+      const res = await s.api.post(
+        `/api/boards/${board.id}/comments`,
+        { anchor: { type: "board" }, body, version_n: 1 },
+        { token },
+      );
+      expect(res.status).toBe(201);
+    }
+
+    const detail = await s.api.get(`/api/boards/${board.id}`, { token });
+    const detailBody = (await detail.json()) as { unresolved_comments: number };
+    const list = await s.api.get("/api/boards", { token });
+    const listBody = (await list.json()) as Array<{
+      id: string;
+      unresolved_comments: number;
+    }>;
+    const listed = listBody.find((b) => b.id === board.id);
+    expect(detailBody.unresolved_comments).toBe(2);
+    expect(listed?.unresolved_comments).toBe(detailBody.unresolved_comments);
   });
 
   test("returns 404 board_not_found for an unknown id", async () => {

@@ -57,6 +57,7 @@ export function requireAuth(req: Request, db: Database): Actor {
   if (actor !== null) {
     return actor;
   }
-  // Invariant 8 (AGENTS.md): the token value must never surface in errors or logs — describe the failure, not the credential.
+  // Invariant 7 (tokens stored hashed): the token value must never surface in
+  // errors or logs — describe the failure, not the credential.
   throw new HttpError(401, "unauthorized", "invalid or revoked token");
 }

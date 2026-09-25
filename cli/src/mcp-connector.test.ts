@@ -996,7 +996,7 @@ describe("mcp connector — D23 D4 discovery + explicit connect", () => {
     }
   });
 
-  test("board_connect: a redirecting target is refused — the connector never follows it (invariant 1, audit 2026-09-22)", async () => {
+  test("board_connect: a redirecting target is refused — the connector never follows it (invariant 1, loopback bind; audit 2026-09-22)", async () => {
     // The hole this pins shut: fetch follows redirects by default, so a
     // target that 30x-redirects — anywhere, non-loopback included — would be
     // silently fetched, and validation would pass THROUGH the redirect (the

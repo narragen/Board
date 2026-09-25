@@ -23,7 +23,7 @@ repeat up to 30 times:                       # hard cap — never poll unbounded
 
 ## Cursor semantics (get these right)
 
-- A comment's `seq` is the global event seq of its **creation event** — stable, monotonic, never reused (append-only events, invariant 4).
+- A comment's `seq` is the global event seq of its **creation event** — stable, monotonic, never reused (invariant 4, events are append-only).
 - `since` is **exclusive**: the response returns comments with `seq > since`. At-least-once, restart-safe (D13). There is **no server-side ack** — the cursor is client-held; persisting it is the agent's job (and its crash-recovery mechanism).
 - `last_seq` is the board's greatest comment `seq` (0 when the board has none). Store it even when the page is empty; a poll with `since=last_seq` costs one cheap query and keeps your presence fresh.
 

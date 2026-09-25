@@ -9,6 +9,9 @@ import { clearSessionToken, setSessionToken } from "../token.ts";
 import { BoardView } from "./BoardView.tsx";
 import {
   createdComments,
+  getBoardFailure,
+  getVersionFailure,
+  holdLoad,
   installApiMock,
   restoreAttempts,
   restoredBoards,
@@ -37,7 +40,7 @@ mock.module("mermaid", () => ({
   },
 }));
 
-const { render, cleanup } = createComponentHarness();
+const { render, rerender, cleanup } = createComponentHarness();
 afterEach(cleanup);
 
 describe("BoardView", () => {
@@ -838,7 +841,7 @@ describe("BoardView restore-to-version", () => {
     await act(async () => {
       (barButton(container, "confirm restore") as HTMLElement).click();
     });
-    // the stream delivers board.restored (store.ts restoreVersion's event) —
+    // the stream delivers board.restored (boards.ts restoreVersion's event) —
     // the meta refetch sees the new current version and its pill
     const source = StubEventSource.instances.at(-1);
     await act(async () => {
@@ -911,5 +914,137 @@ describe("BoardView restore-to-version", () => {
       { boardId: "b1", fromN: 1, expectedVersion: 2 },
     ]);
     expect(container.querySelector("div.error")).toBe(null);
+  });
+});
+
+describe("BoardView loading and error states", () => {
+  test("a failed board load renders the error, not the board", async () => {
+    getBoardFailure.thrown = new Error('board "b1" not found');
+    try {
+      const container = render(<BoardView id="b1" />);
+      await act(async () => {});
+      expect(container.querySelector("div.error")?.textContent).toBe(
+        'board "b1" not found',
+      );
+      // the error REPLACES the page: no header, no stuck "loading…"
+      expect(container.querySelector(".board-view")).toBe(null);
+      expect(container.querySelector("div.status")).toBe(null);
+      // a rejection that is not an Error carries no message of its own — the
+      // domain fallback is the only text a human gets
+      getBoardFailure.thrown = { status: 500 };
+      const second = render(<BoardView id="b1" />);
+      await act(async () => {});
+      expect(second.querySelector("div.error")?.textContent).toBe(
+        "failed to load board",
+      );
+    } finally {
+      getBoardFailure.thrown = null;
+    }
+  });
+
+  test("a failed version load says so in its own words", async () => {
+    getVersionFailure.thrown = new Error("version 2 is gone");
+    try {
+      const container = render(<BoardView id="b1" />);
+      await act(async () => {});
+      expect(container.querySelector("div.error")?.textContent).toBe(
+        "version 2 is gone",
+      );
+      // the two loads carry DIFFERENT fallbacks, and a reader needs to know
+      // which one failed
+      getVersionFailure.thrown = { status: 500 };
+      const second = render(<BoardView id="b1" />);
+      await act(async () => {});
+      expect(second.querySelector("div.error")?.textContent).toBe(
+        "failed to load version",
+      );
+    } finally {
+      getVersionFailure.thrown = null;
+    }
+  });
+
+  test("a board id change mid-load ignores the superseded board", async () => {
+    const release = holdLoad("board:b1");
+    try {
+      const container = render(<BoardView id="b1" />);
+      await act(async () => {});
+      expect(container.querySelector("div.status")?.textContent).toBe(
+        "loading…",
+      );
+      // the route moved on before b1 answered
+      await act(async () => {
+        rerender(<BoardView id="b-html" />);
+      });
+      expect(container.querySelector("h1")?.textContent).toBe("Dashboard");
+      // b1's answer arrives now — it must not land on the board being viewed
+      await act(async () => {
+        release();
+      });
+      expect(container.querySelector("h1")?.textContent).toBe("Dashboard");
+      expect(
+        container
+          .querySelector("div.board-content")
+          ?.classList.contains("html"),
+      ).toBe(true);
+    } finally {
+      release();
+    }
+  });
+
+  test("a version switch mid-load ignores the superseded version", async () => {
+    const container = render(<BoardView id="b-html" />);
+    await act(async () => {});
+    const shown = (): string =>
+      container.querySelector("div.board-content")?.textContent ?? "";
+    const clickPill = async (n: number): Promise<void> => {
+      const pills = container.querySelectorAll(
+        "nav.version-switcher button.pill",
+      );
+      await act(async () => {
+        (pills[n] as HTMLElement).click();
+      });
+    };
+    expect(shown()).toContain("Dashboard v2");
+    const release = holdLoad("version:b-html:1");
+    try {
+      await clickPill(0);
+      // v1 has not answered yet, so v2 is still the document on screen
+      expect(shown()).toContain("Dashboard v2");
+      // switch back before it does: the v1 load is now superseded
+      await clickPill(1);
+      await act(async () => {
+        release();
+      });
+      expect(shown()).toContain("Dashboard v2");
+      expect(shown()).not.toContain("Dashboard v1");
+    } finally {
+      release();
+    }
+  });
+
+  test("unmounting mid-load closes the stream and the late resolve lands nowhere", async () => {
+    setSessionToken("sess-ok");
+    const release = holdLoad("board:b1");
+    try {
+      const container = render(<BoardView id="b1" />);
+      await act(async () => {});
+      const source = StubEventSource.instances.at(-1);
+      expect(source?.listeners.size).toBe(1);
+      await cleanup();
+      expect(source?.listeners.size).toBe(0);
+      expect(container.textContent).toBe("");
+      // React 19 makes a state update on an unmounted component a silent
+      // no-op, so the load's own `alive` guard has no black-box signature —
+      // what is assertable is that the late answer changes nothing and throws
+      // nothing. The guard itself is covered by the superseded-load tests
+      // above, which run the same line with the component still mounted.
+      await act(async () => {
+        release();
+      });
+      expect(container.textContent).toBe("");
+    } finally {
+      release();
+      clearSessionToken();
+    }
   });
 });

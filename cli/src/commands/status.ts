@@ -1,7 +1,8 @@
 // status (P3-6, promised in the usage text since M1): a quick health read of
 // one board. REST against the live daemon like the boards.ts commands (no
-// local db — invariant 3), built strictly on existing routes. Instance-aware
-// per D20 wave 2 (resolve.ts owns the precedence).
+// local db — invariant 3, writes go through the daemon), built strictly on
+// existing routes. Instance-aware per D20 wave 2 (resolve.ts owns the
+// precedence).
 import type { Config } from "../../../server/src/config.ts";
 import { type RestTarget, restTarget } from "../resolve.ts";
 import { renderTable } from "../table.ts";
@@ -20,8 +21,8 @@ interface StatusCommandInput {
 }
 
 // Narrow views of the daemon's responses — shapes verified against
-// server/src/routes/{boards,comments,events,webhooks}.ts; only consumed
-// fields are typed (boards.ts ListRow pattern).
+// server/src/routes/{boards,events,webhooks}.ts; only consumed fields are
+// typed (boards.ts ListRow pattern).
 interface BoardView {
   id: string;
   title: string;
@@ -30,9 +31,11 @@ interface BoardView {
   created_at: string;
 }
 
-interface CommentView {
-  in_reply_to: string | null;
-  resolved_at: string | null;
+// GET /api/boards/:id — the count sits on the envelope beside `board`, not
+// inside it (server/src/routes/boards.ts getBoardHandler).
+interface BoardDetail {
+  board: BoardView;
+  unresolved_comments: number;
 }
 
 interface EventView {
@@ -45,14 +48,6 @@ interface SubscriberView {
   principal: string;
   last_seq: number;
   last_seen: string;
-}
-
-// Same count as the server's countUnresolvedRoots (server/src/comments.ts) so
-// this UNRESOLVED matches `board list`'s column: root threads only.
-function unresolvedRoots(comments: CommentView[]): number {
-  return comments.filter(
-    (comment) => comment.in_reply_to === null && comment.resolved_at === null,
-  ).length;
 }
 
 async function runStatus(
@@ -72,27 +67,17 @@ async function runStatus(
     io.stderr(`board: ${await errorMessage(boardRes)}`);
     return 1;
   }
-  const { board } = (await boardRes.json()) as { board: BoardView };
-
-  // GET /api/boards/:id carries no unresolved count (only the list route
-  // computes one), so it is counted from the comments read — which doubles
-  // as a cursor-presence poll for agent callers (server/src/comments.ts):
-  // polls count as presence by design, so a status run may list itself.
-  const commentsRes = await doFetch(
-    new URL(`/api/boards/${boardId}/comments`, target.baseUrl),
-    { headers },
-  );
-  if (!commentsRes.ok) {
-    io.stderr(`board: ${await errorMessage(commentsRes)}`);
-    return 1;
-  }
-  const { comments } = (await commentsRes.json()) as {
-    comments: CommentView[];
-  };
+  // The unresolved count comes off the envelope (F15): it is the server's own
+  // countUnresolvedRoots, so this column can never disagree with `board list`'s.
+  // This used to re-derive the rule from a full comments read, which also made
+  // a read-only health command register a cursor poll — status would show up in
+  // its own subscribers table.
+  const { board, unresolved_comments: unresolved } =
+    (await boardRes.json()) as BoardDetail;
 
   // Board rows carry no ended_at — that timestamp lives on the board.ended
-  // event (invariant 4: the event log is the audit trail), so read the events
-  // route, and only for a board that is actually ended.
+  // event (invariant 4, events are append-only — the log is the audit trail),
+  // so read the events route, and only for a board that is actually ended.
   let ended: string | null = null;
   if (board.status === "ended") {
     const eventsRes = await doFetch(
@@ -104,7 +89,7 @@ async function runStatus(
       return 1;
     }
     const { events } = (await eventsRes.json()) as { events: EventView[] };
-    // endBoard never appends a second board.ended event (store.ts), so the
+    // endBoard never appends a second board.ended event (boards.ts), so the
     // last match is the end timestamp.
     ended = events.filter((ev) => ev.type === "board.ended").at(-1)?.ts ?? null;
   }
@@ -128,7 +113,7 @@ async function runStatus(
       ["TITLE", board.title],
       ["STATUS", board.status],
       ["VERSION", String(board.current_version)],
-      ["UNRESOLVED", String(unresolvedRoots(comments))],
+      ["UNRESOLVED", String(unresolved)],
       ["CREATED", board.created_at],
       ["ENDED", ended ?? "-"],
     ],

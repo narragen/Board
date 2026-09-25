@@ -1,3 +1,9 @@
+// The publish render pipeline: markdown/html input → the one stored HTML
+// document, with `data-ba` anchor ids injected (docs/anchors.md).
+//
+// Read this first: everything up to `patchCreateNodeIterator` below is
+// happy-dom compatibility shimming for DOMPurify (D11) — not pipeline logic.
+// The pipeline itself starts at `renderMarkdownDocument`.
 import type { Config } from "dompurify";
 import createDOMPurify from "dompurify";
 import type { Document, Element, Node, Text } from "happy-dom";
@@ -54,9 +60,10 @@ Object.defineProperty(window.Node.prototype, "nodeName", {
 
 // happy-dom's NodeIterator stops returning nodes as soon as the walk removes
 // one, but DOMPurify's whole design is "iterate + remove inline" — everything
-// after the first removal would survive unsanitized (invariant 6,
-// docs/security.md "Content rules"). Replace createNodeIterator on the exact
-// document dompurify caches it from with a removal-robust pre-order iterator.
+// after the first removal would survive unsanitized — invariant 5 (markdown
+// through DOMPurify), docs/security.md "Content rules". Replace
+// createNodeIterator on the exact document dompurify caches it from with a
+// removal-robust pre-order iterator.
 function withinRoot(root: Node, node: Node): boolean {
   let current: Node | null = node;
   while (current !== null) {
@@ -136,7 +143,7 @@ function patchCreateNodeIterator(targetWindow: Window): void {
 patchCreateNodeIterator(window);
 
 // dompurify v3 factory pattern: bind to our happy-dom window. Markdown rendered
-// for the host chrome passes through DOMPurify, always (invariant 6,
+// for the host chrome passes through DOMPurify, always (invariant 5,
 // docs/security.md "Content rules").
 const purifier = createDOMPurify(
   window as unknown as Parameters<typeof createDOMPurify>[0],
@@ -148,8 +155,8 @@ const SANITIZE_CONFIG: Config = {
   FORBID_TAGS: ["script", "iframe", "object", "embed", "noscript"],
 };
 
-// SVG assets are sanitized at ingest with an SVG-only profile (invariant 6,
-// docs/security.md "Assets"): event handlers are never in any profile's allow
+// SVG assets are sanitized at ingest with an SVG-only profile — invariant 6
+// (verified asset ingest), docs/security.md "Assets": event handlers are never in any profile's allow
 // list; script + foreignObject are in the svg profile by default and are
 // explicitly forbidden; and the URI allowlist narrows to same-document
 // fragment references so no external beacon can ride an asset. xmlns
@@ -181,7 +188,8 @@ const CODE_HIGHLIGHT_THEME = "github-light";
 // character (☐ open / ☑ checked), the title kept as the one hint CSS cannot
 // carry, and aria-hidden because the marker is decorative — the list item's
 // own text carries the meaning. Runs AFTER sanitize, on already-sanitized
-// nodes only, never by widening the sanitizer profile (invariant 5).
+// nodes only, never by widening the sanitizer profile — invariant 5 (markdown
+// through DOMPurify).
 // Deliberately NOT applied to html boards (renderHtmlDocument): D18 scripts
 // make their checkboxes genuinely interactive.
 export const TASK_LIST_TITLE =
@@ -203,6 +211,16 @@ interface RenderedDocument {
   anchors: ExtractedAnchor[];
 }
 
+// Step ORDER is load-bearing (docs/anchors.md "markdown"), and reordering
+// breaks anchoring silently rather than loudly:
+//   - sanitize before parsing into the document, so nothing downstream ever
+//     walks unsanitized nodes — invariant 5 (markdown through DOMPurify);
+//   - convertMermaidBlocks before highlightCodeBlocks, or mermaid fences are
+//     still <code> when the highlighter reaches them and get syntax-coloured
+//     into garbage;
+//   - injectAnchorIds LAST, so positional ids land on the final structure —
+//     any later transform would shift the blocks the ids were assigned to and
+//     every stored comment anchor would point at the wrong element.
 export async function renderMarkdownDocument(
   md: string,
 ): Promise<RenderedDocument> {
@@ -225,9 +243,9 @@ export async function renderMarkdownDocument(
 }
 
 // Publish validation for asset embeds. Extends Error, not StoreError: the
-// render pipeline runs INSIDE publishVersion (store.ts imports render.ts), so
+// render pipeline runs INSIDE publishVersion (boards.ts imports render.ts), so
 // subclassing StoreError would be a circular import — the ImportRejected
-// precedent (bundle.ts) extends Error for the same reason. daemon.ts maps
+// precedent (bundle-import.ts) extends Error for the same reason. errors.ts maps
 // this to 400 "invalid_asset_embed"; MCP surfaces err.message as the tool
 // error text.
 export class InvalidAssetEmbed extends Error {
@@ -244,7 +262,8 @@ export class InvalidAssetEmbed extends Error {
 // Asset embeds (M6): ![alt](asset:<id>) rewrites to /assets/<id> BEFORE
 // sanitize — DOMPurify strips unknown uri schemes, so a post-sanitize rewrite
 // would have nothing left to rewrite (and widening the sanitizer's URI scheme
-// list for asset: is exactly what invariant 5 forbids).
+// list for asset: is exactly what invariant 5 — markdown through DOMPurify —
+// forbids).
 //
 // Decision update (dogfooded, live root-cause): an agent script interpolated
 // an undefined variable into "asset:undefined", and the old behavior — keep

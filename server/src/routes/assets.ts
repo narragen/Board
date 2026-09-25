@@ -1,5 +1,4 @@
 import type { Database } from "bun:sqlite";
-import { statSync } from "node:fs";
 import { join } from "node:path";
 import {
   getAsset,
@@ -8,6 +7,7 @@ import {
   readBinaryAssetBody,
 } from "../assets.ts";
 import { HttpError, jsonError, jsonOk, readJsonBody } from "../http.ts";
+import { isFile } from "../static.ts";
 import { asString } from "../validate.ts";
 import {
   actorName,
@@ -151,12 +151,4 @@ export function serveAsset(
       "cache-control": ASSET_IMMUTABLE_CACHE,
     },
   });
-}
-
-function isFile(path: string): boolean {
-  try {
-    return statSync(path).isFile();
-  } catch {
-    return false;
-  }
 }

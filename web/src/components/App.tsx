@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { errText } from "../../../server/src/err-text.ts";
 import { completePasteExchange, exchange, onUnauthorized } from "../api.ts";
 import { currentRoute, onRouteChange, type Route } from "../router.ts";
 import {
@@ -90,7 +91,7 @@ export function Gate({ onReady }: { onReady: () => void }) {
       await completePasteExchange(token);
       onReady();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "exchange failed");
+      setError(errText(err, "exchange failed"));
     } finally {
       setBusy(false);
     }

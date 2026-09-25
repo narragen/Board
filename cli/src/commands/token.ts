@@ -38,10 +38,11 @@ function tokenAdd(
     // D17: names are permanent, so --force re-mints — revoke whatever row
     // holds the name and mint fresh under the first free suffix, keeping
     // the audit trail. Both facts print; the store-it-now line is the one
-    // sanctioned plaintext surface (invariant 8). `--force` without a name
-    // never reaches here — it is refused at parse (runTokenCommand): force
-    // means "revoke whatever holds the name", which is only safe for a name
-    // a human chose deliberately, never for a generated handle.
+    // sanctioned plaintext surface (invariant 7, tokens stored hashed).
+    // `--force` without a name never reaches here — it is refused at parse
+    // (runTokenCommand): force means "revoke whatever holds the name", which
+    // is only safe for a name a human chose deliberately, never for a
+    // generated handle.
     const { previous, created } = reMintToken(db, { name });
     if (previous !== null) {
       io.stdout(`revoked old token "${previous.name}"`);
@@ -65,7 +66,8 @@ function tokenAdd(
         : createToken(db, { name });
   } catch (err) {
     if (err instanceof TokenNameTaken) {
-      // The message carries the agent name only; no token material exists in this branch (invariant 8).
+      // The message carries the agent name only; no token material exists in
+      // this branch (invariant 7, tokens stored hashed).
       io.stderr(`board: ${err.message}`);
       // actionable tail (dogfooded dead-end: the owner hit this and had no
       // next step) — a taken name is permanent, so re-mint or rename
@@ -116,11 +118,11 @@ function tokenRevoke(db: Database, name: string, io: CommandIo): number {
   return 0;
 }
 
-// The human's-tool local-db path (invariant 4's sanctioned exception, same as
-// `open`): token rows live in the target db — the shared data dir by default,
-// the instance's temp db with --instance (D20 wave 2, resolve.ts). Opened only
-// after argv/resolution pass, so usage errors never create the data dir (the
-// twice-bitten footgun).
+// The human's-tool local-db path (invariant 3's sanctioned exception — writes
+// go through the daemon — same as `open`): token rows live in the target db —
+// the shared data dir by default, the instance's temp db with --instance (D20
+// wave 2, resolve.ts). Opened only after argv/resolution pass, so usage errors
+// never create the data dir (the twice-bitten footgun).
 function withDb(
   config: Config,
   instance: string | undefined,

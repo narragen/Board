@@ -1,5 +1,5 @@
+import { requireBoard } from "../boards.ts";
 import { jsonOk } from "../http.ts";
-import { BoardNotFound, getBoard } from "../store.ts";
 import { asOptionalString, asString } from "../validate.ts";
 import {
   listSubscribers,
@@ -34,9 +34,7 @@ function unsubscribeHandler(_req: Request, ctx: RequestContext): Response {
 
 function subscribersHandler(_req: Request, ctx: RequestContext): Response {
   const boardId = ctx.params.id;
-  if (getBoard(ctx.db, boardId) === null) {
-    throw new BoardNotFound(boardId);
-  }
+  requireBoard(ctx.db, boardId);
   return jsonOk(listSubscribers(ctx.db, boardId));
 }
 

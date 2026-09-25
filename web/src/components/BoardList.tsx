@@ -1,30 +1,9 @@
-import { useEffect, useState } from "react";
-import { type BoardWithCounts, listBoards } from "../api.ts";
+import { listBoards } from "../api.ts";
 import { formatDate } from "../format.ts";
+import { useLoad } from "../use-load.ts";
 
 export function BoardList() {
-  const [boards, setBoards] = useState<BoardWithCounts[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    listBoards()
-      .then((loaded) => {
-        if (alive) {
-          setBoards(loaded);
-        }
-      })
-      .catch((err) => {
-        if (alive) {
-          setError(
-            err instanceof Error ? err.message : "failed to load boards",
-          );
-        }
-      });
-    return () => {
-      alive = false;
-    };
-  }, []);
+  const { data: boards, error } = useLoad(listBoards, "failed to load boards");
 
   if (error !== null) {
     return <div className="error">{error}</div>;

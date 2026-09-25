@@ -5,8 +5,8 @@
 // stdio MCP connector, which opencode spawns as `node …/mcp-connector.ts`
 // with no bun on its PATH) — so the parsers live here, importable by node:
 // pure string/JSON in, typed values out, no Bun APIs, no fs access.
-// Filesystem reading stays with each consumer (the connector reads; per
-// invariant 3 it never writes).
+// Filesystem reading stays with each consumer (the connector reads and never
+// writes — invariant 3, writes go through the daemon).
 
 /** The instance.json registry entry (D20) — written by `board up`, stamped by
  * `down`/prune. Never contains tokens: credentials live only in the sibling

@@ -39,6 +39,12 @@ export interface RestTarget {
 const NO_TOKEN =
   "no token: pass --token <token> or set BOARD_TOKEN (mint one with: make token add cli)";
 
+// The instance flavour of NO_TOKEN: same precedence, one more fallback to
+// name (the 0600 env file `up` wrote). Both REST paths below hand it back.
+function noInstanceToken(sel: Selection): string {
+  return `no token: pass --token <token>, set BOARD_TOKEN, or source the instance env file (${sel.paths.env})`;
+}
+
 function envToken(): string | undefined {
   const raw = process.env.BOARD_TOKEN;
   return raw !== undefined && raw.trim().length > 0 ? raw.trim() : undefined;
@@ -52,7 +58,7 @@ function envInstance(): string | undefined {
 // Selection precedence (D20 wave 2): --instance flag > BOARD_INSTANCE env >
 // none. An unknown id errors with the LIVE ids listed so a stale id is
 // self-correcting in one glance.
-export function selectInstance(
+function selectInstance(
   config: Config,
   flag?: string,
 ): Selection | null | string {
@@ -136,6 +142,12 @@ function bootingRefusal(sel: Selection): string {
 // Instance paths only ever speak loopback; refused without a workaround hint
 // (credential-leak defense). An explicit --token to the SHARED daemon (its
 // url comes from the local config, not the registry) stays the user's call.
+//
+// Do NOT unify with mcp-connector.ts isLoopbackHttpUrl: that one is strictly
+// stricter (it also rejects userinfo, query strings and sub-paths — audits
+// 2026-09-22/09-23, where a connector-pinned url is user input). This one vets
+// a url the CLI itself wrote into the registry, and it could not import that
+// file anyway (the connector must stay outside the Bun graph).
 function isLoopbackUrl(url: string): boolean {
   try {
     // IPv6 hosts come back bracketed ("[::1]")
@@ -200,7 +212,7 @@ export function restTarget(
   }
   const token = instanceToken(sel, parsed.token);
   if (token === undefined) {
-    return `no token: pass --token <token>, set BOARD_TOKEN, or source the instance env file (${sel.paths.env})`;
+    return noInstanceToken(sel);
   }
   if (!isLoopbackUrl(url)) {
     return loopbackRefusal(sel);
@@ -250,7 +262,7 @@ export function exportTarget(
   if (state === "live") {
     const token = instanceToken(sel, parsed.token);
     if (token === undefined) {
-      return `no token: pass --token <token>, set BOARD_TOKEN, or source the instance env file (${sel.paths.env})`;
+      return noInstanceToken(sel);
     }
     if (!isLoopbackUrl(url)) {
       return loopbackRefusal(sel);
@@ -266,6 +278,13 @@ export function exportTarget(
 export interface OpenTarget {
   baseUrl: string;
   dataDir: string;
+}
+
+// open's dead-instance answer: nothing is serving, so there is no keepsake
+// consolation to offer (unlike notServing above) — just the state and why it
+// matters for this command.
+function notRunning(sel: Selection, state: InstanceState): string {
+  return `instance "${sel.entry.id}" is not running (${stateText(sel, state)}) — nothing serves the human link`;
 }
 
 // open needs a LIVE daemon — the human link is served by it — and mints the
@@ -291,7 +310,7 @@ export function openTarget(
   const url = sel.entry.url;
   if (url === undefined) {
     if (sel.entry.closedAt !== undefined) {
-      return `instance "${sel.entry.id}" is not running (${stateText(sel, "closed")}) — nothing serves the human link`;
+      return notRunning(sel, "closed");
     }
     return bootingRefusal(sel);
   }
@@ -300,7 +319,7 @@ export function openTarget(
     return foreignRefusal(sel);
   }
   if (state !== "live") {
-    return `instance "${sel.entry.id}" is not running (${stateText(sel, state)}) — nothing serves the human link`;
+    return notRunning(sel, state);
   }
   return { baseUrl: url, dataDir: sel.entry.dataDir };
 }

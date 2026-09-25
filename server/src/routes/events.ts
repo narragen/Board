@@ -1,7 +1,7 @@
+import { requireBoard } from "../boards.ts";
 import type { BoardEvent } from "../domain.ts";
 import { getBoardEvents, getEvents, maxEventSeq } from "../events.ts";
 import { jsonOk } from "../http.ts";
-import { BoardNotFound, getBoard } from "../store.ts";
 import { asNonNegativeIntString } from "../validate.ts";
 import type { RequestContext, Route } from "./route.ts";
 
@@ -48,9 +48,7 @@ function listEventsHandler(req: Request, ctx: RequestContext): Response {
 
 function boardEventsHandler(req: Request, ctx: RequestContext): Response {
   const boardId = ctx.params.id;
-  if (getBoard(ctx.db, boardId) === null) {
-    throw new BoardNotFound(boardId);
-  }
+  requireBoard(ctx.db, boardId);
   const since = asNonNegativeIntString(
     new URL(req.url).searchParams.get("since"),
     "since",

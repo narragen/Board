@@ -104,6 +104,41 @@ describe("api client", () => {
     expect(apiErr.message).toContain("not found");
   });
 
+  // The invariant every error-reporting site in web/ leans on: errText's
+  // `fallback` is reached only for a non-Error rejection, so a rejection from
+  // here that is NOT an Error would render the domain fallback (hiding the real
+  // cause) or "[object Object]" where no fallback is passed. Nothing in the
+  // type system enforces it — `catch` binds `unknown` — so it is asserted over
+  // all three ways apiFetch can reject.
+  test("every rejection is an Error with a message (the errText contract)", async () => {
+    // 1. non-JSON error body (a proxy's html 502): the envelope parse fails and
+    //    the fallback code/message stand in
+    mockFetch(
+      () => new Response("<html>502 Bad Gateway</html>", { status: 502 }),
+    );
+    const nonJson = await getBoard("x").catch((e: unknown) => e);
+    expect(nonJson).toBeInstanceOf(ApiError);
+    expect((nonJson as ApiError).code).toBe("http_502");
+    expect((nonJson as ApiError).message).toBe("request failed: 502");
+
+    // 2. malformed SUCCESS body: res.json() throws where nothing catches it —
+    //    the one rejection that is not an ApiError, still an Error (SyntaxError)
+    mockFetch(() => new Response("<html>not json</html>", { status: 200 }));
+    const badBody = await getBoard("x").catch((e: unknown) => e);
+    expect(badBody).not.toBeInstanceOf(ApiError);
+    expect(badBody).toBeInstanceOf(Error);
+    expect((badBody as Error).message).not.toBe("");
+
+    // 3. transport failure: propagates untouched (fetch rejects with a
+    //    TypeError), so the caller still gets a message
+    mockFetch(() => {
+      throw new TypeError("Failed to fetch");
+    });
+    const offline = await getBoard("x").catch((e: unknown) => e);
+    expect(offline).toBeInstanceOf(Error);
+    expect((offline as Error).message).toBe("Failed to fetch");
+  });
+
   test("401 clears the session and fires the unauthorized handler", async () => {
     setSessionToken("sess-token");
     let unauthorized = false;

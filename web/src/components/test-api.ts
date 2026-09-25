@@ -15,11 +15,17 @@ import type {
 } from "../api.ts";
 
 // Shared component-test fixtures + the ../api.ts test double, used by every
-// component test file that renders through the api layer. Each bun test file
-// gets its own module registry (verified bun 1.4.2), so this helper module —
-// and its recorder arrays — evaluate once per file; the reset in
-// installApiMock keeps that guarantee even if a future bun shared the
-// registry across files.
+// component test file that renders through the api layer.
+//
+// bun runs every test file in ONE process with ONE module registry (verified
+// bun 1.4.2): this module body evaluates once for the whole run, and a
+// mock.module installed by one file is still installed for every LATER file —
+// mock.restore() does not undo it. So the recorder arrays below are shared
+// state, and installApiMock resets every one of them at each file's load. The
+// same hazard the other way round: a test file that mocks ../api.ts
+// DIFFERENTLY must hand the real module back when it is done, or it answers
+// api.test.ts's calls (api.test.ts guards the identical hazard for global
+// fetch).
 
 export const versionCalls: Array<[string, number]> = [];
 export const exchangeCalls: string[] = [];
@@ -35,6 +41,40 @@ export const resolvedIds: string[] = [];
 // upload failures are flipped per test — a mutable holder, since the mock
 // closure below must always see the current value
 export const uploadFailures: { error: Error | null } = { error: null };
+
+// What listBoards rejects with next, if anything. Typed `unknown` on purpose:
+// the case worth a fixture is a rejection that is NOT an Error, where the
+// caller's domain fallback is the only text a human gets (use-load.ts
+// fallbackMessage → errText's `fallback`, server/src/err-text.ts).
+export const listBoardsFailure: { thrown: unknown } = { thrown: null };
+
+// What getBoard / getVersion reject with next, if anything: the board view's
+// error state has no other way in, and the two loads carry DIFFERENT fallback
+// messages, so each needs its own switch. Same mutable-holder shape as
+// uploadFailures.
+export const getBoardFailure: { thrown: unknown } = { thrown: null };
+export const getVersionFailure: { thrown: unknown } = { thrown: null };
+
+// Held loads: holdLoad(key) parks every call for that key until the returned
+// release() runs. It is the only way to land a resolve AFTER the effect that
+// started it was superseded — a board id change, a version switch, an unmount —
+// which is what the loads' `alive` guards exist for. Keys are `board:<id>` and
+// `version:<id>:<n>`.
+const holds = new Map<string, Promise<void>>();
+
+export function holdLoad(key: string): () => void {
+  let release = (): void => {};
+  holds.set(
+    key,
+    new Promise<void>((resolve) => {
+      release = resolve;
+    }),
+  );
+  return () => {
+    holds.delete(key);
+    release();
+  };
+}
 
 // Audit view (M7): getEvents records its query object and pops the next page
 // off eventPages (empty queue → empty page, so untouched tests see "No events
@@ -181,7 +221,7 @@ const VERSIONS: VersionMeta[] = [
   },
 ];
 
-// what a restore appends server-side (store.ts: label "restore of vN", actor
+// what a restore appends server-side (boards.ts: label "restore of vN", actor
 // is the session's "human")
 const RESTORED_META: VersionMeta = {
   board_id: "b1",
@@ -256,6 +296,7 @@ export function installApiMock(): void {
   replied.length = 0;
   resolvedIds.length = 0;
   uploadFailures.error = null;
+  listBoardsFailure.thrown = null;
   eventQueries.length = 0;
   eventPages.length = 0;
   sessionsList.length = 0;
@@ -264,9 +305,21 @@ export function installApiMock(): void {
   restoredBoards.length = 0;
   restoreAttempts.length = 0;
   restoreFailures.error = null;
+  getBoardFailure.thrown = null;
+  getVersionFailure.thrown = null;
+  holds.clear();
   mock.module("../api.ts", () => ({
-    listBoards: async () => [MD_BOARD],
+    listBoards: async () => {
+      if (listBoardsFailure.thrown !== null) {
+        throw listBoardsFailure.thrown;
+      }
+      return [MD_BOARD];
+    },
     getBoard: async (id: string) => {
+      await holds.get(`board:${id}`);
+      if (getBoardFailure.thrown !== null) {
+        throw getBoardFailure.thrown;
+      }
       if (id === "b-html") {
         return {
           board: {
@@ -294,6 +347,10 @@ export function installApiMock(): void {
     },
     getVersion: async (id: string, n: number) => {
       versionCalls.push([id, n]);
+      await holds.get(`version:${id}:${n}`);
+      if (getVersionFailure.thrown !== null) {
+        throw getVersionFailure.thrown;
+      }
       if (id === "b-html") {
         return { ...HTML_VERSION, n, content: n === 1 ? HTML_V1 : HTML_V2 };
       }
@@ -356,7 +413,7 @@ export function installApiMock(): void {
         throw restoreFailures.error;
       }
       restoredBoards.push({ boardId, fromN, expectedVersion });
-      // the 201 body IS the new current version (store.ts restoreVersion)
+      // the 201 body IS the new current version (boards.ts restoreVersion)
       return { ...MD_VERSION, n: 3, label: `restore of v${fromN}` };
     },
     streamUrl: () => "/api/stream?token=stub",

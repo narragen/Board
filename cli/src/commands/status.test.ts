@@ -101,15 +101,6 @@ const OPEN_BOARD = {
   current_version: 4,
 };
 
-// c1/c2 are unresolved roots, c3 a resolved root, c4 a reply — the CLI must
-// count 2, matching the server's countUnresolvedRoots.
-const COMMENTS = [
-  { id: "c1", in_reply_to: null, resolved_at: null },
-  { id: "c2", in_reply_to: null, resolved_at: null },
-  { id: "c3", in_reply_to: null, resolved_at: "2026-09-15T09:00:00.000Z" },
-  { id: "c4", in_reply_to: "c1", resolved_at: null },
-];
-
 const SUBSCRIBERS = [
   {
     id: null,
@@ -134,10 +125,9 @@ const SUBSCRIBERS = [
 function boardRoutes(board: typeof OPEN_BOARD): (path: string) => Response {
   return (path) => {
     if (path === `/api/boards/${BOARD_ID}`) {
-      return okJson({ board, versions: [] });
-    }
-    if (path === `/api/boards/${BOARD_ID}/comments`) {
-      return okJson({ comments: COMMENTS, last_seq: 7 });
+      // unresolved_comments rides the detail envelope (F15) — the CLI prints
+      // the server's count and never re-derives it from a comments read.
+      return okJson({ board, versions: [], unresolved_comments: 2 });
     }
     if (path === `/api/boards/${BOARD_ID}/subscribers`) {
       return okJson(SUBSCRIBERS);
@@ -155,11 +145,11 @@ describe("board status", () => {
     const code = await cap.run([BOARD_ID], { BOARD_TOKEN: "tok-123" });
     expect(code).toBe(0);
     expect(cap.err).toEqual([]);
-    // one request per surface: board, comments, subscribers — no events
-    // fetch for an open board
+    // one request per surface: board, subscribers — no events fetch for an
+    // open board, and no comments fetch at all (F15: the count rides the
+    // detail envelope, so status never registers a cursor poll of its own)
     expect(cap.requests.map((r) => r.url)).toEqual([
       `http://127.0.0.1:7800/api/boards/${BOARD_ID}`,
-      `http://127.0.0.1:7800/api/boards/${BOARD_ID}/comments`,
       `http://127.0.0.1:7800/api/boards/${BOARD_ID}/subscribers`,
     ]);
     expect(

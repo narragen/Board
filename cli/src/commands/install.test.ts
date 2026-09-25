@@ -1112,7 +1112,8 @@ describe("board install failure modes", () => {
       expect(text).toContain(MCP_CONNECTOR_PATH);
       // the generic manual-merge guidance does not fit the container case
       expect(text).not.toContain('add it manually under "mcp"');
-      // print-once discipline (invariant 7): the token rides stdout only —
+      // print-once discipline (invariant 7, tokens stored hashed): the token
+      // rides stdout only —
       // the EROFS guidance carries the placeholder, never the plaintext
       const token = tokenLines(out)[0];
       expect(token).toBeDefined();

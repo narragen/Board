@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import type { Actor } from "../domain.ts";
-import { HttpError } from "../http.ts";
+import { decodeSegment, HttpError } from "../http.ts";
 
 type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
@@ -91,15 +91,6 @@ function patternRegExp(path: string): RegExp {
     PATH_PATTERN_CACHE.set(path, re);
   }
   return re;
-}
-
-function decodeSegment(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    // malformed percent-escape: keep the raw segment rather than 500ing on bad input
-    return value;
-  }
 }
 
 // Pattern-only match (method ignored) — the daemon uses this to compute 405 Allow.

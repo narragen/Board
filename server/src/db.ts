@@ -46,7 +46,7 @@ const MIGRATIONS: ReadonlyArray<{ version: number; sql: string }> = [
       );
       CREATE INDEX idx_comments_board_created ON comments (board_id, created_at);
 
-      -- AUTOINCREMENT so seq values are never reused, even hypothetically post-delete — events are append-only (invariant 5).
+      -- AUTOINCREMENT so seq values are never reused, even hypothetically post-delete — invariant 4 (events are append-only).
       CREATE TABLE events (
         seq INTEGER PRIMARY KEY AUTOINCREMENT,
         ts TEXT NOT NULL,
@@ -81,7 +81,7 @@ const MIGRATIONS: ReadonlyArray<{ version: number; sql: string }> = [
   {
     // docs/security.md "human browser session": one-time exchange tokens minted
     // by `board open` and the resulting browser sessions. Only sha256 lives
-    // here — plaintext exists solely in the minting call's return (invariant 8).
+    // here — plaintext exists solely in the minting call's return (invariant 7).
     version: 2,
     sql: `
       CREATE TABLE sessions (
@@ -133,7 +133,8 @@ const MIGRATIONS: ReadonlyArray<{ version: number; sql: string }> = [
     // M7 hardening: live sessions expire 30 days after exchange (sessions.ts
     // SESSION_TTL_MS). Backfill the pre-TTL rows so no session grandfathered
     // in as immortal: created_at + 30 days, the same value a fresh exchange
-    // stamps. A sessions-table write — never an event (invariant 4).
+    // stamps. A sessions-table write — never an event; invariant 4 (events are
+    // append-only) is untouched.
     version: 6,
     sql: `
       UPDATE sessions

@@ -134,7 +134,7 @@ describe("requireAuth", () => {
     db.close();
   });
 
-  test("failure messages never echo the token value (invariant 8)", () => {
+  test("failure messages never echo the token value (invariant 7)", () => {
     const db = freshDb();
     const { token } = createToken(db, { name: "alice" });
     revokeToken(db, "alice");
@@ -190,7 +190,7 @@ describe("requireAuth with human sessions", () => {
     db.close();
   });
 
-  test("session failure messages never echo the token value (invariant 8)", () => {
+  test("session failure messages never echo the token value (invariant 7)", () => {
     const db = freshDb();
     const exchange = createExchangeToken(db);
     const session = exchangeSession(db, exchange);

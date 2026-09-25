@@ -1,12 +1,13 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import type { BoardEvent, EventType } from "../../../server/src/domain.ts";
+import { errText } from "../../../server/src/err-text.ts";
 import { getEvents } from "../api.ts";
 import { formatDate } from "../format.ts";
 
 // The known event types (server/src/domain.ts EventType). The filter select is
 // closed over this list; unknown future types still render as rows — they just
 // are not selectable until added here.
-export const AUDIT_EVENT_TYPES: EventType[] = [
+const AUDIT_EVENT_TYPES: EventType[] = [
   "board.created",
   "board.imported",
   "board.published",
@@ -114,7 +115,7 @@ export function EventLogPanel({ pollMs = 5000 }: EventLogPanelProps) {
       }
     } catch (err) {
       if (mountedRef.current) {
-        setError(err instanceof Error ? err.message : "failed to load events");
+        setError(errText(err, "failed to load events"));
         setLoading(false);
       }
     } finally {

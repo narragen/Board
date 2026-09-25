@@ -1,3 +1,18 @@
+// The client half of the anchoring model: turn a DOM location (a hovered
+// element, a text selection) into a comment anchor, describe an anchor for the
+// sidebar, and resolve one back to a location to highlight. The server half
+// (id injection at publish, extraction, validation) lives in
+// server/src/render.ts + validate.ts; docs/anchors.md is the spec both halves
+// implement, and a change here that alters the anchor shapes updates it.
+//
+// Security constraint, not a style choice: `data-ba` ids and asset ids are
+// agent-supplied strings (an html board's author writes its own markers, D18),
+// so every lookup here iterates elements and compares the attribute. Building
+// a selector from one — `[data-ba="${id}"]` — lets a crafted id close the
+// attribute early and match elements the lookup never intended, or throw a
+// selector SyntaxError on content the human then cannot annotate. The rule is
+// stated in docs/anchors.md and the server side holds to it as well; do not
+// "optimise" these loops into querySelector.
 import type {
   Anchor,
   RowAnchor,

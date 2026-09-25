@@ -2,6 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { LISTEN_LINE } from "../../server/src/main.ts";
 
 const dirs: string[] = [];
 
@@ -148,7 +149,8 @@ describe("board serve (runDaemon)", () => {
           break;
         }
         out += decoder.decode(value, { stream: true });
-        const match = /board: host app listening on (http:\S+)/.exec(out);
+        // the daemon's own listen-line contract, not a copy of it
+        const match = LISTEN_LINE.exec(out);
         if (match !== null) {
           url = match[1];
           break;

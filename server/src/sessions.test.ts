@@ -68,7 +68,7 @@ describe("createExchangeToken", () => {
     db.close();
   });
 
-  test("hashes at rest: the row holds sha256(token), never the plaintext (invariant 8)", () => {
+  test("hashes at rest: the row holds sha256(token), never the plaintext (invariant 7)", () => {
     const db = freshDb();
     const token = createExchangeToken(db);
     const row = rowFor(db, token);

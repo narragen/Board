@@ -132,9 +132,9 @@ export function getVersion(id: string, n: number): Promise<Version> {
   return apiFetch<Version>(`/api/boards/${id}/versions/${n}`);
 }
 
-// Restore-to-version (M7, plan.md:85): republish version `fromN` as a new
-// current version — an append-only COPY, history is kept (store.ts
-// restoreVersion). Mirrors the route contract exactly: BOTH body fields are
+// Restore-to-version (M7, plan.md "Web UI" → board view): republish version
+// `fromN` as a new current version — an append-only COPY, history is kept
+// (boards.ts restoreVersion). Mirrors the route contract exactly: BOTH fields are
 // required (routes/boards.ts asInt 400s on a missing one) — expected_version
 // is the caller's known current_version, and a stale one 409s
 // version_conflict with the server's current_version in the error body.
@@ -248,7 +248,7 @@ export function getEvents(query: EventQuery = {}): Promise<EventsPage> {
   return apiFetch<EventsPage>(`/api/events${qs === "" ? "" : `?${qs}`}`);
 }
 
-// Mirrors the server domain SessionInfo (routes/session.ts): `id` is the row's
+// Mirrors the server domain SessionInfo (domain.ts, served by routes/sessions.ts): `id` is the row's
 // sha256 token-hash PK, `kind` splits live sessions from unexchanged exchange
 // rows — the audit listing ships BOTH (docs/security.md "Audit view").
 export interface SessionInfo {

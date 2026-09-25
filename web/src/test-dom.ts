@@ -89,8 +89,13 @@ export function setVisibilityState(state: "visible" | "hidden"): void {
 // unmount everything on cleanup. Each test file calls this at its top level
 // and wires its own `afterEach(cleanup)` — hook registration must stay
 // file-local, so the harness only owns the roots and the render/unmount pair.
+//
+// `rerender` re-renders the most recent root with new props, which is the only
+// way to stage a prop CHANGE (a different board id, a different version) —
+// `render` opens a fresh root, which is a mount, not a change.
 export function createComponentHarness(): {
   render: (element: ReactElement) => HTMLElement;
+  rerender: (element: ReactElement) => void;
   cleanup: () => Promise<void>;
 } {
   const roots: Root[] = [];
@@ -104,6 +109,15 @@ export function createComponentHarness(): {
     });
     return container;
   };
+  const rerender = (element: ReactElement): void => {
+    const root = roots.at(-1);
+    if (root === undefined) {
+      throw new Error("rerender before render");
+    }
+    act(() => {
+      root.render(element);
+    });
+  };
   const cleanup = async (): Promise<void> => {
     for (const root of roots.splice(0)) {
       await act(async () => {
@@ -111,5 +125,5 @@ export function createComponentHarness(): {
       });
     }
   };
-  return { render, cleanup };
+  return { render, rerender, cleanup };
 }

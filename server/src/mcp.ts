@@ -1,6 +1,6 @@
 // MCP Streamable HTTP endpoint (M5-lite, D16): thirteen server tools mapping
-// 1:1 onto the
-// service layer — the same functions the REST routes call, so the event log
+// 1:1 onto the service layer — the same functions the REST routes call, so the
+// event log
 // never distinguishes MCP agents from REST agents. Transport is the SDK's
 // web-standard server transport in stateless JSON mode: every POST gets a
 // fresh server + transport (no sessions), responses are application/json,
@@ -18,15 +18,27 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { ZodRawShape } from "zod";
 import { ingestAssetFromPath } from "./assets.ts";
 import { resolveActor, resolveRequestToken } from "./auth.ts";
-import { buildBundle } from "./bundle.ts";
 import {
+  createBoard,
+  endBoard,
+  filterBoards,
+  listVersions,
+  publishVersion,
+  requireBoard,
+  restoreVersion,
+  StoreError,
+  VersionConflict,
+} from "./boards.ts";
+import { buildBundle } from "./bundle-export.ts";
+import {
+  boardStatusSummary,
   boardsWithCounts,
-  countUnresolvedRoots,
   listCommentsPage,
   replyComment,
   resolveComment,
 } from "./comments.ts";
 import type { Actor } from "./domain.ts";
+import { errText } from "./err-text.ts";
 import { HttpError, readJsonBody } from "./http.ts";
 import {
   connectorLocalToolMessage,
@@ -37,19 +49,6 @@ import {
   type McpToolDef,
   type ServerToolName,
 } from "./mcp-tools.ts";
-import { filterBoards } from "./routes/boards.ts";
-import {
-  BoardNotFound,
-  createBoard,
-  endBoard,
-  getBoard,
-  listBoards,
-  listVersions,
-  publishVersion,
-  restoreVersion,
-  StoreError,
-  VersionConflict,
-} from "./store.ts";
 import { subscribeWebhook } from "./webhooks.ts";
 
 // MCP export carries the zip base64-encoded through JSON (≈ ×4/3 inflation).
@@ -92,9 +91,7 @@ function toolErrorResult(err: unknown): CallToolResult {
   const message =
     err instanceof VersionConflict
       ? `${err.message} (current_version: ${err.current})`
-      : err instanceof Error
-        ? err.message
-        : String(err);
+      : errText(err);
   return { content: [{ type: "text", text: message }], isError: true };
 }
 
@@ -106,17 +103,6 @@ async function run(
   } catch (err) {
     return toolErrorResult(err);
   }
-}
-
-function requireBoard(
-  db: Database,
-  boardId: string,
-): NonNullable<ReturnType<typeof getBoard>> {
-  const board = getBoard(db, boardId);
-  if (board === null) {
-    throw new BoardNotFound(boardId);
-  }
-  return board;
 }
 
 // Version metadata only — full content never rides back through MCP (publish
@@ -180,8 +166,8 @@ interface ToolArgs {
 }
 
 // Handlers under the same keys as the manifest, built per-request context.
-// The service layer is async for publish/restore (render pipeline) and sync
-// everywhere else; handlers await uniformly.
+// publishVersion is the one async service call (the render pipeline); handlers
+// await uniformly regardless.
 const TOOL_HANDLERS: {
   [K in ServerToolName]: (
     ctx: McpContext,
@@ -260,9 +246,9 @@ const TOOL_HANDLERS: {
   board_restore:
     (ctx) =>
     ({ board_id, from_n, expected_version }) =>
-      run(async () =>
+      run(() =>
         textResult(
-          await restoreVersion(ctx.db, ctx.dataDir, board_id, {
+          restoreVersion(ctx.db, ctx.dataDir, board_id, {
             from_n,
             expected_version,
             actor: ctx.actor.name,
@@ -290,30 +276,7 @@ const TOOL_HANDLERS: {
   board_status:
     (ctx) =>
     ({ board_id }) =>
-      run(() => {
-        const boards = listBoards(ctx.db);
-        const subscribers = ctx.db
-          .prepare("SELECT COUNT(*) AS c FROM subscribers")
-          .get() as { c: number };
-        const status: Record<string, unknown> = {
-          status: "ok",
-          boards: {
-            open: boards.filter((board) => board.status === "open").length,
-            ended: boards.filter((board) => board.status === "ended").length,
-          },
-          subscribers: subscribers.c,
-        };
-        if (board_id !== undefined) {
-          const board = requireBoard(ctx.db, board_id);
-          status.board = {
-            id: board.id,
-            status: board.status,
-            current_version: board.current_version,
-            unresolved_comments: countUnresolvedRoots(ctx.db, board.id),
-          };
-        }
-        return textResult(status);
-      }),
+      run(() => textResult(boardStatusSummary(ctx.db, board_id))),
   board_upload_image:
     (ctx) =>
     ({ board_id, path }) =>
@@ -335,7 +298,7 @@ const TOOL_HANDLERS: {
     (ctx) =>
     ({ board_id }) =>
       run(() => {
-        requireBoard(ctx.db, board_id);
+        // no board pre-check: buildBundle gates on requireBoard itself
         const zip = buildBundle(ctx.db, ctx.dataDir, board_id);
         if (zip.byteLength > MCP_EXPORT_MAX_BYTES) {
           throw new StoreError(

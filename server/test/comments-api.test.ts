@@ -185,6 +185,22 @@ describe("comments API", () => {
     );
   });
 
+  // The existing 404 test sends a well-formed body, so it passes either way.
+  // This one pins the ORDERING: the board check must run before argument
+  // parsing, or an agent retrying against a torn-down board is told its anchor
+  // is malformed instead of that the board is gone.
+  test("unknown board beats a malformed body: 404, not 400", async () => {
+    const res = await s.api.post(
+      "/api/boards/nosuch/comments",
+      { body: "x" },
+      { token: agent.token },
+    );
+    expect(res.status).toBe(404);
+    expect((await json<{ error: { code: string } }>(res)).error.code).toBe(
+      "board_not_found",
+    );
+  });
+
   test("400 invalid anchor: bogus section id", async () => {
     const res = await s.api.post(
       `/api/boards/${boardId}/comments`,

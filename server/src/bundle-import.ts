@@ -1,58 +1,43 @@
-// Bundle export/import (M6, docs/plan.md REST API): GET /boards/:id/export
-// zips a self-contained bundle — manifest, version SOURCES, comments, asset
-// bytes, and the board's event rows as an audit snapshot. POST /boards/import
-// recreates the board from a bundle under a NEW id.
-//
-// Import is the D18 foreign-content path (docs/security.md "Import
-// quarantine"): every byte of the bundle is untrusted. Markdown re-renders
-// through the full publish pipeline (DOMPurify again), html re-derives through
-// renderHtmlDocument (fresh anchor injection), assets re-verify through the
-// shared ingest core (verifyAssetBytes), and the bundle's derived data
-// (anchors, event seqs) is never trusted. The zip is parsed in memory only —
-// no bundle byte is ever used as a filesystem path (zip-slip).
+// Bundle import — the quarantine (docs/security.md "Import quarantine"). Every
+// byte of an incoming bundle is untrusted foreign content, and this file is the
+// highest-security-stakes code in the repo:
+//   - entry names must match ENTRY_PATTERNS exactly (zip-slip: no bundle byte
+//     is ever used as a filesystem path),
+//   - markdown re-renders through the full publish pipeline (DOMPurify again),
+//     html re-derives through renderHtmlDocument (fresh anchor injection),
+//   - assets re-verify through the shared ingest core (verifyAssetBytes), and
+//     svg bytes that change under re-sanitization mean post-export tampering,
+//   - the bundle's own derived data (anchors, event seqs) is never trusted, and
+//     its events are never replayed into the live log.
+// Nothing is written until every item has passed; a failure is a 422 naming it.
 import type { Database } from "bun:sqlite";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { unzipSync, zipSync } from "fflate";
+import { unzipSync } from "fflate";
 import {
   ingestAsset,
-  listAssets,
   MAX_ASSET_BYTES,
   MAX_BOARD_ASSET_BYTES,
   type VerifiedAsset,
   verifyAssetBytes,
 } from "./assets.ts";
-import { listComments } from "./comments.ts";
-import type {
-  Anchor,
-  Board,
-  BoardEvent,
-  BoardFormat,
-  BoardStatus,
-} from "./domain.ts";
 import {
-  appendEvent,
-  appendEventDb,
-  getBoardEventsUnbounded,
-  mirrorEventFiles,
-} from "./events.ts";
+  createBoard,
+  endBoard,
+  publishVersion,
+  requireBoard,
+} from "./boards.ts";
+import {
+  BUNDLE_SCHEMA_VERSION,
+  type Manifest,
+  type ManifestAssetEntry,
+  type ManifestVersionEntry,
+} from "./bundle-format.ts";
+import type { Anchor, Board, BoardEvent, BoardFormat } from "./domain.ts";
+import { errText } from "./err-text.ts";
+import { appendEvent, appendEventDb, mirrorEventFiles } from "./events.ts";
 import { HttpError, MAX_BODY_BYTES, readCappedBody } from "./http.ts";
 import { shortId } from "./ids.ts";
 import { renderHtmlDocument, renderMarkdownDocument } from "./render.ts";
-import {
-  BoardNotFound,
-  createBoard,
-  endBoard,
-  getBoard,
-  getVersion,
-  listVersions,
-  publishVersion,
-  StoreError,
-} from "./store.ts";
 import { asAnchor } from "./validate.ts";
-
-// Bumped on any bundle-format change; import rejects everything else (422).
-export const BUNDLE_SCHEMA_VERSION = 1;
 
 // Import request cap: a bundle legitimately holds multiple ≤8MB versions plus
 // the ≤8MB asset quota, so the 8 MB document cap does not transfer; 64 MB
@@ -70,187 +55,6 @@ export class ImportRejected extends Error {
 function reject(message: string): never {
   throw new ImportRejected(message);
 }
-
-// ---------------------------------------------------------------------------
-// Export
-// ---------------------------------------------------------------------------
-
-// fflate over hand-rolling zip: tiny, sync, does zip+unzip, zero config, and
-// deterministic on identical input (same entries → same bytes — bundles are
-// comparable in tests; the manifest's exported_at is the only per-call
-// variance). Hand-rolling a zip container is format-risk not worth taking.
-const ZIP_OPTIONS = { level: 6 } as const;
-
-interface ManifestVersionEntry {
-  n: number;
-  file: string;
-  label: string | null;
-  note: string | null;
-  created_by: string;
-  created_at: string;
-}
-
-interface ManifestAssetEntry {
-  id: string;
-  file: string;
-  mime: string;
-  size: number;
-  source: string;
-  created_by: string;
-  created_at: string;
-}
-
-interface Manifest {
-  schema_version: number;
-  source_board_id: string;
-  exported_at: string;
-  board: {
-    title: string;
-    format: BoardFormat;
-    status: BoardStatus;
-    tags: string[];
-    created_by: string;
-    created_at: string;
-  };
-  versions: ManifestVersionEntry[];
-  comments: { count: number };
-  assets: ManifestAssetEntry[];
-}
-
-function versionFileName(n: number, format: BoardFormat): string {
-  return `content/${n}.${format === "markdown" ? "md" : "html"}`;
-}
-
-function assetFileName(file: string): string {
-  return `assets/${file}`;
-}
-
-// Build the zip for one board. Board must exist (404 at the route layer).
-// Everything is buffered: board docs are ≤8MB and assets ≤8MB total, so
-// in-memory assembly is fine (streaming would buy nothing at these sizes).
-export function buildBundle(
-  db: Database,
-  dataDir: string,
-  boardId: string,
-): Uint8Array {
-  const board = getBoard(db, boardId);
-  if (board === null) {
-    throw new BoardNotFound(boardId);
-  }
-
-  const entries: Record<string, Uint8Array> = {};
-  const versionIndex: ManifestVersionEntry[] = [];
-  for (const meta of listVersions(db, boardId)) {
-    const full = getVersion(db, boardId, meta.n);
-    if (full === null) {
-      throw new StoreError(
-        `version ${meta.n} of board "${boardId}" is indexed but missing`,
-      );
-    }
-    // SOURCE content only (docs/plan.md "bundle export"). Format is per
-    // publish: a markdown version keeps source_md (the derived HTML is
-    // re-computed on import — re-sanitized, fresh anchors); an html version
-    // carries the stored id-injected document, which IS its source per D18
-    // (import re-derives anchors from it, keepExisting keeps the ids).
-    const isMarkdown = full.source_md !== null;
-    const source = isMarkdown ? full.source_md : full.content;
-    if (source === null) {
-      throw new StoreError(
-        `version ${meta.n} of board "${boardId}" has no source to export`,
-      );
-    }
-    const file = versionFileName(meta.n, isMarkdown ? "markdown" : "html");
-    entries[file] = new TextEncoder().encode(source);
-    versionIndex.push({
-      n: meta.n,
-      file,
-      label: meta.label,
-      note: meta.note,
-      created_by: meta.created_by,
-      created_at: meta.created_at,
-    });
-  }
-
-  const assetIndex: ManifestAssetEntry[] = [];
-  for (const asset of listAssets(db, boardId)) {
-    const path = join(dataDir, "boards", boardId, "assets", asset.file);
-    let bytes: Uint8Array;
-    try {
-      bytes = new Uint8Array(readFileSync(path));
-    } catch {
-      throw new StoreError(
-        `asset "${asset.id}" of board "${boardId}" is missing its bundle file`,
-      );
-    }
-    entries[assetFileName(asset.file)] = bytes;
-    assetIndex.push({
-      id: asset.id,
-      file: assetFileName(asset.file),
-      mime: asset.mime,
-      size: asset.size,
-      source: asset.source,
-      created_by: asset.created_by,
-      created_at: asset.created_at,
-    });
-  }
-
-  // Comments replay as data: strip board_id and seq (db-isms of the source
-  // board — the new board mints fresh ids and fresh event seqs).
-  const comments = listComments(db, boardId).map((c) => ({
-    id: c.id,
-    version_n: c.version_n,
-    anchor: c.anchor,
-    body: c.body,
-    author: c.author,
-    in_reply_to: c.in_reply_to,
-    created_at: c.created_at,
-    edited_at: c.edited_at,
-    resolved_at: c.resolved_at,
-    resolved_by: c.resolved_by,
-  }));
-
-  // Audit snapshot: this board's event rows verbatim. Import never replays
-  // them into the live log (invariant 4 keeps the global seq append-only and
-  // monotonic) — the snapshot exists so the bundle preserves its own history.
-  const events = getBoardEventsUnbounded(db, boardId);
-
-  const manifest: Manifest = {
-    schema_version: BUNDLE_SCHEMA_VERSION,
-    source_board_id: board.id,
-    exported_at: new Date().toISOString(),
-    board: {
-      title: board.title,
-      format: board.format,
-      status: board.status,
-      tags: board.tags,
-      created_by: board.created_by,
-      created_at: board.created_at,
-    },
-    versions: versionIndex,
-    comments: { count: comments.length },
-    assets: assetIndex,
-  };
-
-  return zipSync(
-    {
-      "manifest.json": new TextEncoder().encode(
-        JSON.stringify(manifest, null, 2),
-      ),
-      "comments.json": new TextEncoder().encode(
-        JSON.stringify({ comments }, null, 2),
-      ),
-      "events.jsonl": new TextEncoder().encode(
-        events.map((ev) => JSON.stringify(ev)).join("\n"),
-      ),
-      ...entries,
-    },
-    ZIP_OPTIONS,
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Import — quarantine (docs/security.md "Import quarantine")
-// ---------------------------------------------------------------------------
 
 // Zip-slip + layout defense: every entry name must match the expected layout
 // exactly. This one table rejects absolute paths, `..`, backslashes, NULs,
@@ -578,9 +382,7 @@ async function parseBundle(zipBytes: Uint8Array): Promise<ParsedBundle> {
         renderHtmlDocument(source);
       }
     } catch (err) {
-      reject(
-        `version ${v.n} failed to render: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      reject(`version ${v.n} failed to render: ${errText(err)}`);
     }
     versions.push({ n: v.n, format, label: v.label, note: v.note, source });
   }
@@ -595,6 +397,12 @@ async function parseBundle(zipBytes: Uint8Array): Promise<ParsedBundle> {
   }
   const assets: BundleAsset[] = [];
   for (const a of manifest.assets) {
+    // These two guard the LOOKUP KEY, not the path: ENTRY_PATTERNS already
+    // refused any entry name that is not `assets/<10 base62>.<ext>` above, so a
+    // zip holding `assets/../x.png` never reaches here. What they catch is a
+    // manifest naming a file the zip does not have — `a.file` is the one bundle
+    // string used as an index into `entries`, so its shape is pinned before it
+    // is used as a key.
     if (!/^[0-9A-Za-z]{10}$/.test(a.id)) {
       reject(`manifest.json: asset id "${a.id}" has an unexpected shape`);
     }
@@ -612,6 +420,15 @@ async function parseBundle(zipBytes: Uint8Array): Promise<ParsedBundle> {
         `asset "${a.id}" is ${bytes.byteLength} bytes but the manifest says ${a.size}`,
       );
     }
+    // Unreachable today, and deliberately kept. MAX_ASSET_BYTES (10 MB) is
+    // LARGER than MAX_BOARD_ASSET_BYTES (8 MB), so an asset big enough to trip
+    // this already tripped the per-board total above — the audit that found
+    // this proposed deleting it. But the unreachability is a property of those
+    // two constants, not of this check: the natural configuration is the
+    // reverse (a generous board budget, a tighter per-asset one), and the same
+    // cap is load-bearing on the live ingest path (assets.ts). This is an
+    // untrusted-zip quarantine; a guard that costs one comparison and becomes
+    // essential the moment someone raises the board cap stays.
     if (bytes.byteLength > MAX_ASSET_BYTES) {
       reject(
         `asset "${a.id}" is ${bytes.byteLength} bytes, exceeding the ${MAX_ASSET_BYTES} byte per-asset cap`,
@@ -621,9 +438,7 @@ async function parseBundle(zipBytes: Uint8Array): Promise<ParsedBundle> {
     try {
       verified = verifyAssetBytes(bytes, a.mime);
     } catch (err) {
-      reject(
-        `asset "${a.id}": ${err instanceof Error ? err.message : String(err)}`,
-      );
+      reject(`asset "${a.id}": ${errText(err)}`);
     }
     // Tamper gate for svg: ingest stores SANITIZED bytes, so our own exports
     // re-sanitize to a no-op. Bytes that change under re-sanitization mean
@@ -882,11 +697,9 @@ export async function importBoard(
   if (bundle.manifest.board.status === "ended") {
     endBoard(db, dataDir, board.id, actor);
   }
-  const imported = getBoard(db, board.id);
-  if (imported === null) {
-    throw new StoreError(`imported board "${board.id}" missing after import`);
-  }
-  return imported;
+  // re-read rather than return the created board: status may have flipped to
+  // ended above
+  return requireBoard(db, board.id);
 }
 
 // Raw-body reader for the import route: the shared capped read core with the

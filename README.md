@@ -99,4 +99,5 @@ Cheaper paths: `make install` alone updates the skills without touching credenti
 | [docs/architecture.md](docs/architecture.md) | Process model, board bundles, request flows, events |
 | [docs/security.md](docs/security.md) | Threat model, what runs where, and why that's safe |
 | [docs/decisions.md](docs/decisions.md) | Why things are the way they are |
+| [docs/stack.md](docs/stack.md) | What Board is built with, and what was deliberately rejected |
 | [docs/plan.md](docs/plan.md) | The approved plan, scope, and milestone status |

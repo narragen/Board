@@ -1,3 +1,4 @@
+import { requireBoard } from "../boards.ts";
 import {
   createComment,
   listComments,
@@ -6,10 +7,9 @@ import {
   replyComment,
   resolveComment,
 } from "../comments.ts";
-import type { Board, Comment } from "../domain.ts";
+import type { Comment } from "../domain.ts";
 import { serializeFeedback, threadRootOf } from "../feedback.ts";
 import { jsonOk } from "../http.ts";
-import { BoardNotFound, getBoard } from "../store.ts";
 import {
   asAnchor,
   asInt,
@@ -24,19 +24,17 @@ import {
   type Route,
 } from "./route.ts";
 
-// The store's BoardNotFound maps to 404 board_not_found in daemon.ts's single
-// error-translation point — no hand-rolled HttpError here.
-function requireBoard(ctx: RequestContext, boardId: string): Board {
-  const board = getBoard(ctx.db, boardId);
-  if (board === null) {
-    throw new BoardNotFound(boardId);
-  }
-  return board;
-}
-
+// The board check runs BEFORE argument parsing, and that ordering is the whole
+// point of it. createComment does gate on requireOpenBoard and throws the same
+// BoardNotFound — but only after asAnchor/asInt have already rejected a
+// malformed body, so without this line an unknown board plus a bad body
+// answers 400 invalid_request instead of 404 board_not_found. An agent
+// retrying against a torn-down board would be told its anchor is wrong.
+// (Sibling handlers that delegate to buildBundle need no such line: it takes
+// no arguments to parse, so its own requireBoard is already first.)
 function createCommentHandler(_req: Request, ctx: RequestContext): Response {
   const boardId = ctx.params.id;
-  requireBoard(ctx, boardId);
+  requireBoard(ctx.db, boardId);
   const body = bodyFields(ctx.body);
   const comment = createComment(ctx.db, ctx.dataDir, boardId, {
     anchor: asAnchor(body.anchor, "anchor"),
@@ -100,7 +98,7 @@ function threadsTouchedSince(comments: Comment[], since: number): Comment[] {
 
 function feedbackHandler(req: Request, ctx: RequestContext): Response {
   const boardId = ctx.params.id;
-  const board = requireBoard(ctx, boardId);
+  const board = requireBoard(ctx.db, boardId);
   const since = asNonNegativeIntString(
     new URL(req.url).searchParams.get("since"),
     "since",

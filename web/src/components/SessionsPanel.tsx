@@ -1,37 +1,33 @@
-import { useEffect, useState } from "react";
-import { listSessions, revokeSession, type SessionInfo } from "../api.ts";
+import { useState } from "react";
+import { errText } from "../../../server/src/err-text.ts";
+import { listSessions, revokeSession } from "../api.ts";
 import { formatDate } from "../format.ts";
+import { useLoad } from "../use-load.ts";
 
 export function SessionsPanel() {
-  const [sessions, setSessions] = useState<SessionInfo[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const {
+    data: sessions,
+    error,
+    reload,
+  } = useLoad(listSessions, "failed to load sessions");
   // Two-step revoke: the first click arms the confirm for exactly one row —
   // one click is too destructive for a credential.
   const [confirming, setConfirming] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-
-  const refresh = async (): Promise<void> => {
-    try {
-      setSessions(await listSessions());
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "failed to load sessions");
-    }
-  };
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: mount-only load; refresh is a render-scoped closure whose identity would refetch every render
-  useEffect(() => {
-    void refresh();
-  }, []);
+  // The revoke's own failure slot, separate from the load's (BoardView's
+  // restoreError does the same): a refetch clears a stale load error, and it
+  // must not also erase the reason a revoke just failed.
+  const [revokeError, setRevokeError] = useState<string | null>(null);
 
   const revoke = async (id: string): Promise<void> => {
     setBusy(true);
     try {
       await revokeSession(id);
       setConfirming(null);
-      await refresh();
+      setRevokeError(null);
+      await reload();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "revoke failed");
+      setRevokeError(errText(err, "revoke failed"));
     } finally {
       setBusy(false);
     }
@@ -45,7 +41,9 @@ export function SessionsPanel() {
           {sessions === null ? "" : `${sessions.length} total`}
         </span>
       </header>
-      {error !== null && <div className="error">{error}</div>}
+      {(error ?? revokeError) !== null && (
+        <div className="error">{error ?? revokeError}</div>
+      )}
       {sessions === null ? (
         <div className="status small">loading…</div>
       ) : sessions.length === 0 ? (
@@ -70,7 +68,7 @@ export function SessionsPanel() {
                       exchange row means a one-time ?token= URL was minted but
                       never swapped — the credential is still out there, and
                       revoking it is exactly what the button is for
-                      (routes/session.ts, docs/security.md "Audit view"). */}
+                      (routes/sessions.ts, docs/security.md "Audit view"). */}
                   {session.kind === "session" ? (
                     <span className="badge active">live</span>
                   ) : (

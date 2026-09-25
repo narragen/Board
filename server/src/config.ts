@@ -19,7 +19,7 @@ export interface Config {
 type Env = Record<string, string | undefined>;
 
 const DEFAULT_DATA_DIR = "~/.board";
-// Loopback-only bind is invariant 1 (docs/security.md); BOARD_HOST/BOARD_BIND are the explicit, documented opt-outs.
+// Invariant 1 (loopback bind), docs/security.md; BOARD_HOST/BOARD_BIND are the explicit, documented opt-outs.
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 7800;
 const DEFAULT_BIND = ["127.0.0.1"];
@@ -110,28 +110,16 @@ export function loadConfig(): Config {
   return makeConfig(process.env);
 }
 
-// D23 D3 ratified a persistent mount for the agent box's data dir
-// (BOARD_DATA_DIR=/home/node/board), and nothing ever enforced it. A box that
-// skips the mount runs perfectly on the container's own writable layer and
-// loses every board the moment the box is re-created — which is not
-// hypothetical: a data dir vanished mid-week during dogfooding, and that reset
-// is part of what D23 was written to answer.
+// Warns when a container's data dir is on the writable layer instead of the
+// D23 D3 mount — measured, not hypothetical: a data dir vanished during
+// dogfooding. Rationale and the agentbox invocation live in
+// docs/deployment.md "Single-container agent box".
 //
-// A warning, not a refusal. The daemon is fully functional; the exposure is
-// future data loss, and refusing to start would break every box running today
-// for a risk that has not materialised yet. Loud at startup is proportionate.
-//
-// Pure, so all three conditions are testable without a container:
-//   1. in a container at all — otherwise none of this applies and we say
-//      nothing on a normal host,
-//   2. not under the system temp dir — a data dir there is ephemeral by
-//      design (every test and `make smoke` uses one), so the warning would be
-//      true and useless,
-//   3. same device as `/` — a volume or bind mount lands on a different
-//      device, so this is what distinguishes "on a mount that survives" from
-//      "on the container's root filesystem". It is the check that makes the
-//      warning a measurement rather than a guess.
-// An unknown device (null) means we could not tell, so we stay quiet.
+// Pure so all three conditions are testable without a container: (1) in a
+// container at all, (2) not under the system temp dir (ephemeral by design —
+// every test and `make smoke` lives there), (3) same device as `/`, which is
+// what distinguishes the root filesystem from a surviving mount. An unknown
+// device (null) means we could not tell, so we stay quiet.
 export function ephemeralDataDirWarning(facts: {
   dataDir: string;
   inContainer: boolean;

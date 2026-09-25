@@ -161,7 +161,7 @@ export interface TokenInfo {
 // Lifecycle metadata only. `id` is the token_hash (the row's PK — a session
 // has no other stable key): exposing the sha256 reveals nothing usable since
 // the token material is 256-bit random, and the plaintext never survives
-// minting (invariant 8).
+// minting (invariant 7).
 export interface SessionInfo {
   id: string;
   kind: "exchange" | "session";

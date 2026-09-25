@@ -14,6 +14,17 @@ export class HttpError extends Error {
 
 const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
+// Percent-decoding for one URL path segment, shared by the route matcher and
+// static path resolution. A malformed escape keeps the raw segment rather than
+// throwing: a bad URL is a 404 from the caller's own rules, never a 500.
+export function decodeSegment(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 export function isUnsafeMethod(method: string): boolean {
   return UNSAFE_METHODS.has(method.toUpperCase());
 }

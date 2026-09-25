@@ -1,11 +1,12 @@
 // M8.1a contract tests: `board up --resume` (session-board continuity — D20,
 // owner green-light 2026-09-16) driven as REAL subprocesses with a temp
-// BOARD_DATA_DIR everywhere — never the real ~/.board (the
-// cli/src/instances.test.ts harness pattern). Spawned instance daemons are
-// tracked (via instance.json's pid) and force-killed in afterAll so a
-// failing assertion cannot leak a process. Every "board is intact" claim is
-// verified over REST against the NEW instance's daemon with the freshly
-// minted agent token — the way the resumed session's agent would consume it.
+// BOARD_DATA_DIR everywhere — never the real ~/.board. The subprocess driver,
+// the `board up` stdout parser and the spawned-daemon tracking come from
+// cli/test/harness.ts (one copy, shared with instances/resolve and the
+// smoke); tracked daemons are force-killed in afterAll so a failing assertion
+// cannot leak a process. Every "board is intact" claim is verified over REST
+// against the NEW instance's daemon with the freshly minted agent token — the
+// way the resumed session's agent would consume it.
 import { afterAll, describe, expect, test } from "bun:test";
 import {
   copyFileSync,
@@ -13,12 +14,16 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
-  readFileSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  boardIdFrom,
+  createCliHarness,
+  parseUp,
+  type UpOutput,
+} from "../test/harness.ts";
 import {
   instancePaths,
   instancesRoot,
@@ -26,86 +31,16 @@ import {
   writeInstanceEntry,
 } from "./instances.ts";
 
-const dirs: string[] = [];
-const spawned: Array<{ pid: number; dataDir: string }> = [];
+const harness = createCliHarness("board-cli-resume-test-");
+const { freshDir, runCli, trackDir, trackInstance } = harness;
 
-afterAll(async () => {
-  for (const { pid } of spawned) {
-    if (existsSync(`/proc/${pid}`)) {
-      try {
-        process.kill(pid, "SIGKILL");
-      } catch {
-        // already gone
-      }
-    }
-  }
-  for (const { dataDir } of spawned) {
-    rmSync(dataDir, { recursive: true, force: true });
-  }
-  for (const dir of dirs) {
-    rmSync(dir, { recursive: true, force: true });
-  }
+afterAll(() => {
+  harness.cleanup();
 });
-
-function freshDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "board-cli-resume-test-"));
-  dirs.push(dir);
-  return dir;
-}
 
 const V1_MD =
   "# Decision log\n\n## Rollout order\n\nThe rollout must wait for the migration to finish.\n";
 const OTHER_MD = "# Scratch notes\n\nUnrelated prior session.\n";
-
-interface Proc {
-  exitCode: number;
-  stdout: string;
-  stderr: string;
-}
-
-async function runCli(
-  args: string[],
-  env: Record<string, string> = {},
-): Promise<Proc> {
-  const proc = Bun.spawn(
-    [process.execPath, join(import.meta.dir, "main.ts"), ...args],
-    { env, stdout: "pipe", stderr: "pipe" },
-  );
-  const [exitCode, stdout, stderr] = await Promise.all([
-    proc.exited,
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ]);
-  return { exitCode: exitCode ?? -1, stdout, stderr };
-}
-
-interface UpOutput {
-  id: string;
-  url: string;
-  token: string;
-  envPath: string;
-  human?: string;
-}
-
-function parseUp(stdout: string): UpOutput {
-  const head =
-    /instance (s-[0-9A-Za-z]{10}) listening on (http:\/\/127\.0\.0\.1:\d+)/.exec(
-      stdout,
-    );
-  const token =
-    /^agent token \(print once — it is not recoverable\): (\S+)$/m.exec(
-      stdout,
-    )?.[1];
-  const envPath =
-    /^credentials env file \(agent shells: source it\): (.+)$/m.exec(
-      stdout,
-    )?.[1];
-  const human = /^human link: (.+)$/m.exec(stdout)?.[1];
-  if (head === null || token === undefined || envPath === undefined) {
-    throw new Error(`could not parse up output:\n${stdout}`);
-  }
-  return { id: head[1] ?? "", url: head[2] ?? "", token, envPath, human };
-}
 
 interface ResumedBoard {
   source: string;
@@ -125,23 +60,6 @@ function parseResumed(stdout: string): ResumedBoard[] {
     id: m[2] ?? "",
     title: m[3] ?? "",
   }));
-}
-
-// Track a live instance for afterAll force-kill, reading the pid back from
-// the registry (the CLI output deliberately does not print the pid).
-function trackInstance(dir: string, up: UpOutput): void {
-  const entry = JSON.parse(
-    readFileSync(instancePaths(dir, up.id).json, "utf8"),
-  ) as { pid: number; dataDir: string };
-  spawned.push({ pid: entry.pid, dataDir: entry.dataDir });
-}
-
-function boardIdFrom(up: UpOutput): string {
-  const id = /#\/boards\/([0-9A-Za-z]{10})/.exec(up.human ?? "")?.[1];
-  if (id === undefined) {
-    throw new Error(`no human link board id in up output:\n${up.human}`);
-  }
-  return id;
 }
 
 // up + publish a file, then down — the keepsake-zip factory most resume
@@ -495,7 +413,7 @@ describe("board up --resume", () => {
     });
     try {
       const craftedDataDir = mkdtempSync(join(tmpdir(), "board-instance-"));
-      dirs.push(craftedDataDir);
+      trackDir(craftedDataDir);
       writeInstanceEntry(paths, {
         id: craftedId,
         pid: decoy.pid, // live + foreign: up's prune must leave the entry alone

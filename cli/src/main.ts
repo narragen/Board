@@ -57,10 +57,6 @@ BOARD_TOKEN; with --instance the instance env file's token is the fallback.
 Mint one with: make token add cli
 `;
 
-export function usage(): string {
-  return USAGE;
-}
-
 function consoleIo(): CommandIo {
   return {
     stdout: (text) => {
@@ -72,7 +68,7 @@ function consoleIo(): CommandIo {
   };
 }
 
-export async function main(argv: string[]): Promise<number> {
+async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
   switch (command) {
     case undefined:
@@ -89,7 +85,8 @@ export async function main(argv: string[]): Promise<number> {
       // data dir (twice-bitten footgun — an empty ~/.board from `make token`).
       // runTokenCommand owns the rest of the parsing and opens the RIGHT db
       // itself (shared data dir, or the instance's temp db with --instance —
-      // the sanctioned local-db path, invariant 4).
+      // the sanctioned local-db exception to invariant 3, writes go through
+      // the daemon).
       const [sub] = rest;
       if (sub !== "add" && sub !== "list" && sub !== "revoke") {
         console.error(TOKEN_USAGE);
@@ -119,9 +116,10 @@ export async function main(argv: string[]): Promise<number> {
       }
     }
     case "open":
-      // The sanctioned local-db path (invariant 4) moved into runOpenCommand:
-      // with --instance the exchange token is minted on the INSTANCE's temp
-      // db while its daemon serves the link (D20 wave 2).
+      // The sanctioned local-db path (invariant 3's exception — writes go
+      // through the daemon) moved into runOpenCommand: with --instance the
+      // exchange token is minted on the INSTANCE's temp db while its daemon
+      // serves the link (D20 wave 2).
       return runOpenCommand({
         config: loadConfig(),
         argv: rest,

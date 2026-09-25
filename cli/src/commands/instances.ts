@@ -8,6 +8,7 @@ import { basename } from "node:path";
 import type { Config } from "../../../server/src/config.ts";
 import { resolveWebDist } from "../../../server/src/daemon.ts";
 import { openDb } from "../../../server/src/db.ts";
+import { errText } from "../../../server/src/err-text.ts";
 import { createExchangeToken } from "../../../server/src/sessions.ts";
 import {
   BOOT_GRACE_MS,
@@ -33,7 +34,7 @@ import { defaultOpener, type OpenUrl } from "./open.ts";
 import { scan } from "./rest.ts";
 import type { CommandIo } from "./token.ts";
 
-export const INSTANCES_USAGE = `usage: board up [file] [--title T] [--format markdown|html] [--tags a,b] [--agent NAME] [--resume[=latest|all|<instance-id>]] [--open]
+const INSTANCES_USAGE = `usage: board up [file] [--title T] [--format markdown|html] [--tags a,b] [--agent NAME] [--resume[=latest|all|<instance-id>]] [--open]
        board down [<id>] [--instance <id>] [--keep-data] [--no-export]
        board instances [--all] [--prune]`;
 
@@ -43,10 +44,6 @@ interface InstancesCommandInput {
   io: CommandIo;
   // Seam: tests inject a recorder; the default spawns xdg-open (open.ts).
   openUrl?: OpenUrl;
-}
-
-function errText(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }
 
 function argError(io: CommandIo, message: string): number {
@@ -336,9 +333,10 @@ async function runUp(input: InstancesCommandInput): Promise<number> {
           expected_version: 0,
         },
       );
-      // Sanctioned local-db exception (invariant 3), same as `open`/`token`:
-      // no API route mints exchange tokens by design (docs/api.md), so the
-      // one-time link token is minted directly on the instance's temp db.
+      // Sanctioned local-db exception (invariant 3, writes go through the
+      // daemon), same as `open`/`token`: no API route mints exchange tokens by
+      // design (docs/api.md), so the one-time link token is minted directly on
+      // the instance's temp db.
       const db = openDb(entry.dataDir);
       try {
         human = humanLink(
@@ -360,8 +358,9 @@ async function runUp(input: InstancesCommandInput): Promise<number> {
         : null;
 
     io.stdout(`instance ${entry.id} listening on ${entry.url}`);
-    // The one sanctioned printed plaintext (invariant 7's exception, D20) —
-    // everything else holds the token only hashed (db) or not at all.
+    // The one sanctioned printed plaintext (invariant 7's exception — tokens
+    // stored hashed, D20) — everything else holds the token only hashed (db)
+    // or not at all.
     io.stdout(`agent token (print once — it is not recoverable): ${token}`);
     io.stdout(`credentials env file (agent shells: source it): ${paths.env}`);
     if (human !== undefined) {

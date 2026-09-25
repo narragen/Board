@@ -178,7 +178,7 @@ describe("POST /api/assets — file-copy variant", () => {
     expect(res.status).toBe(400);
     const bodyText = await res.text();
     expect(bodyText).toContain("asset_not_an_image");
-    // never echo file content back (invariant 6)
+    // never echo file content back — invariant 6 (verified asset ingest)
     expect(bodyText).not.toContain(secret);
 
     expect(readdirSync(join(s.dataDir, "boards", board.id, "assets"))).toEqual(
