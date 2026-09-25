@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { afterAll, describe, expect, mock, test } from "bun:test";
 import * as fs from "node:fs";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -601,6 +602,124 @@ describe("board install wiring", () => {
     });
   });
 
+  // The agentbox shape, end to end: the host already populated the skills dir
+  // and the box cannot write to it. `install` used to wire claude perfectly and
+  // then report `failed to wire: claude`, sending the human to manual steps for
+  // an unrelated problem — and failing any container setup script that checked
+  // the exit code.
+  test("an unwritable skills dir that already holds the skills is not a failure", () => {
+    withIsolatedEnv(({ home }) => {
+      const db = freshDb();
+      const skillsRoot = join(home, ".claude", "skills");
+      const lockedDirs: string[] = [];
+      const lockedFiles: string[] = [];
+      // Pre-populate exactly what a host install leaves behind.
+      for (const name of SKILL_NAMES_UNDER_TEST) {
+        const skillDir = join(skillsRoot, name);
+        const templateDir = join(skillDir, "templates");
+        mkdirSync(templateDir, { recursive: true });
+        const skillFile = join(skillDir, "SKILL.md");
+        writeFileSync(skillFile, "host copy");
+        lockedFiles.push(skillFile);
+        for (const file of TEMPLATES_UNDER_TEST) {
+          const path = join(templateDir, file);
+          writeFileSync(path, "host copy");
+          lockedFiles.push(path);
+        }
+        lockedDirs.push(templateDir, skillDir);
+      }
+      // Read-only from here on. Both the files AND their directories: on a
+      // read-only mount neither is writable, and overwriting an existing file
+      // needs write permission on the FILE, not on its directory — locking
+      // only the directory leaves the copy succeeding.
+      //
+      // EACCES here rather than EROFS, deliberately: the usability rule keys
+      // off the file being present, not off which errno explained the failure.
+      for (const path of lockedFiles) {
+        chmodSync(path, 0o400);
+      }
+      for (const dir of lockedDirs) {
+        chmodSync(dir, 0o500);
+      }
+      try {
+        const { out, err, io } = capture();
+        const code = runInstallCommand({
+          db,
+          argv: ["--agents", "claude"],
+          io,
+          checkHealth: HEALTHY,
+          claudeOnPath: NO_CLAUDE,
+        });
+        expect(code).toBe(0);
+        expect(err.join("\n")).not.toContain("failed to wire");
+        // and it says so positively rather than looking like a failure
+        expect(
+          out.filter((line) => line.includes("already present, not refreshed")),
+        ).toHaveLength(SKILL_COUNT);
+        db.close();
+      } finally {
+        for (const dir of lockedDirs) {
+          chmodSync(dir, 0o700);
+        }
+        for (const path of lockedFiles) {
+          chmodSync(path, 0o600);
+        }
+      }
+    });
+  });
+
+  // The other half of the rule: unwritable AND missing is a real failure, because
+  // the skill would point the agent at a template it cannot open.
+  test("an unwritable skills dir with nothing in it still fails", () => {
+    withIsolatedEnv(({ home }) => {
+      const db = freshDb();
+      const skillsRoot = join(home, ".claude", "skills");
+      mkdirSync(skillsRoot, { recursive: true });
+      chmodSync(skillsRoot, 0o500);
+      try {
+        const { err, io } = capture();
+        const code = runInstallCommand({
+          db,
+          argv: ["--agents", "claude"],
+          io,
+          checkHealth: HEALTHY,
+          claudeOnPath: NO_CLAUDE,
+        });
+        expect(code).toBe(1);
+        expect(err.join("\n")).toContain("failed to wire");
+        db.close();
+      } finally {
+        chmodSync(skillsRoot, 0o700);
+      }
+    });
+  });
+
+  // The #9 regression, now guarded rather than merely fixed: `claude mcp add`
+  // on an existing name printed "already exists", exited 0 and wrote nothing.
+  // A zero exit from the CLI is not evidence the credential landed, so install
+  // reads it back and refuses to call that a success.
+  test("a wire that reports success but stores nothing is caught, not believed", () => {
+    withIsolatedEnv(() => {
+      const db = freshDb();
+      const { out, err, io } = capture();
+      const code = runInstallCommand({
+        db,
+        argv: ["--agents", "claude"],
+        io,
+        checkHealth: HEALTHY,
+        claudeOnPath: () => true,
+        // exits 0 and writes nothing — exactly the measured no-op
+        runClaude: () => 0,
+      });
+      expect(code).toBe(1);
+      expect(err.join("\n")).toContain("reported a successful wire");
+      expect(err.join("\n")).toContain("would 401");
+      // and the plaintext still reached the human, so nothing is lost
+      expect(tokenLines(out)).toHaveLength(1);
+      db.close();
+    });
+  });
+
   // D25: a read-only skills dir means a container — agent sandboxes mount the
   // host's skills dir read-only. "Copy it there manually" is advice the human
   // cannot follow either, so the EROFS branch names the real fix instead.
@@ -761,8 +880,27 @@ describe("board install wiring", () => {
         io,
         checkHealth: HEALTHY,
         claudeOnPath: () => true,
+        // A faithful fake: a real successful `claude mcp add` writes the
+        // credential into ~/.claude.json, and install now reads it back, so a
+        // fake that only returns 0 is indistinguishable from the #9 no-op.
         runClaude: (args) => {
           calls.push(args);
+          const add = args[0] === "mcp" && args[1] === "add";
+          if (add) {
+            const env = args[args.indexOf("--env") + 1] ?? "";
+            writeFileSync(
+              join(process.env.HOME ?? "", ".claude.json"),
+              JSON.stringify({
+                mcpServers: {
+                  board: {
+                    env: {
+                      BOARD_MCP_TOKEN: env.slice("BOARD_MCP_TOKEN=".length),
+                    },
+                  },
+                },
+              }),
+            );
+          }
           return 0;
         },
       });

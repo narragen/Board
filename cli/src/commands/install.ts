@@ -63,7 +63,12 @@ interface InstallCommandInput {
   // network or the real claude CLI.
   checkHealth?: () => boolean;
   claudeOnPath?: () => boolean;
-  runClaude?: (args: string[]) => number;
+  // `quiet` suppresses the child's output. Only the idempotent `mcp remove`
+  // uses it: on a fresh machine it prints `No MCP server named "board" in user
+  // scope`, which reads as an error on every single install while describing
+  // the expected state. A narrower signature is still assignable here, so test
+  // fakes need no change.
+  runClaude?: (args: string[], opts?: { quiet?: boolean }) => number;
 }
 
 export function parseInstallArgs(argv: string[]): InstallArgs | string {
@@ -133,10 +138,11 @@ function defaultClaudeOnPath(): boolean {
   return Bun.which("claude") !== null;
 }
 
-function defaultRunClaude(args: string[]): number {
+function defaultRunClaude(args: string[], opts?: { quiet?: boolean }): number {
+  const stream = opts?.quiet === true ? "ignore" : "inherit";
   const proc = Bun.spawnSync(["claude", ...args], {
-    stdout: "inherit",
-    stderr: "inherit",
+    stdout: stream,
+    stderr: stream,
   });
   return proc.exitCode ?? 1;
 }
@@ -266,40 +272,79 @@ function homeDir(): string {
 }
 
 // Copies every shipped skill into one agent's skills root (the directory that
-// holds <name>/SKILL.md) — SKILL.md plus the templates it names. Returns false
-// if any copy failed — the caller turns that into a non-zero exit.
+// holds <name>/SKILL.md) — SKILL.md plus the templates it names.
+//
+// Returns whether the skills are USABLE afterwards, which is deliberately not
+// the same as whether this process managed to write them. A read-only skills
+// directory that already holds the files is the container case (D25): the host
+// install put them there and no in-box install can refresh them. That deserves
+// an explanation, not a non-zero exit.
+//
+// Measured consequence of getting this wrong: inside an agentbox, `install`
+// wired claude perfectly, then printed `failed to wire: claude` and pointed the
+// human at manual steps for an unrelated problem. A caller branching on the
+// exit code — a container setup script, for one — wants to know whether the
+// agent can use Board, not whether one particular write succeeded.
 function copySkills(skillsRoot: string, io: CommandIo): boolean {
-  let ok = true;
   const templates = repoTemplateFiles();
-  for (const name of SKILL_NAMES) {
-    const src = repoSkillPath(name);
-    const dest = join(skillsRoot, name, "SKILL.md");
+  let usable = true;
+  // EROFS is a property of the whole mount, so the paragraph explaining it is
+  // worth printing once per agent rather than once per file — six copies of
+  // the same advice is worse than one.
+  let explainedReadOnly = false;
+
+  // One copy attempt. `ok` means the file is in place afterwards, however it
+  // got there; `wrote` means we are the ones who put it there. Usability keys
+  // off presence alone and not off the error kind: the reason a failure is
+  // survivable is that the file exists, whether the filesystem was read-only,
+  // the directory unwritable, or anything else.
+  const place = (
+    src: string,
+    dest: string,
+  ): { ok: boolean; wrote: boolean } => {
     try {
       mkdirSync(dirname(dest), { recursive: true });
       copyFileSync(src, dest);
+      return { ok: true, wrote: true };
     } catch (err) {
-      ok = false;
-      reportSkillCopyFailure(src, dest, err, io);
-      // A skills root we cannot create is one we cannot put templates in
-      // either. Report the cause once per skill, not once per file.
-      continue;
+      const readOnly = err instanceof Error && err.message.includes("EROFS");
+      if (!readOnly || !explainedReadOnly) {
+        reportSkillCopyFailure(src, dest, err, io);
+      }
+      explainedReadOnly = explainedReadOnly || readOnly;
+      return { ok: existsSync(dest), wrote: false };
     }
-    let copied = 0;
+  };
+
+  for (const name of SKILL_NAMES) {
+    const dest = join(skillsRoot, name, "SKILL.md");
+    const skill = place(repoSkillPath(name), dest);
+    usable = skill.ok && usable;
+    let wrote = skill.wrote;
+    let present = skill.ok ? 1 : 0;
     for (const file of templates) {
-      const from = join(REPO_TEMPLATES_DIR, file);
-      const to = join(skillsRoot, name, "templates", file);
-      try {
-        mkdirSync(dirname(to), { recursive: true });
-        copyFileSync(from, to);
-        copied++;
-      } catch (err) {
-        ok = false;
-        reportSkillCopyFailure(from, to, err, io);
+      const result = place(
+        join(REPO_TEMPLATES_DIR, file),
+        join(skillsRoot, name, "templates", file),
+      );
+      usable = result.ok && usable;
+      wrote = wrote || result.wrote;
+      if (result.ok) {
+        present++;
       }
     }
-    io.stdout(`skill: ${dest} (+${copied} templates)`);
+    if (wrote) {
+      io.stdout(`skill: ${dest} (+${present - 1} templates)`);
+    } else if (present === templates.length + 1) {
+      // Nothing written and nothing missing: the container case, already
+      // explained on stderr. Say so positively so the log does not read as a
+      // failure.
+      io.stdout(`skill: ${dest} — already present, not refreshed (read-only)`);
+    }
+    // Otherwise a file is genuinely missing; the cause is on stderr and
+    // `usable` is already false.
   }
-  return ok;
+  return usable;
 }
 
 // A read-only skills directory means a container: agentbox and friends mount the
@@ -493,7 +538,7 @@ function wireClaude(
   token: string,
   io: CommandIo,
   claudeOnPath: () => boolean,
-  runClaude: (args: string[]) => number,
+  runClaude: (args: string[], opts?: { quiet?: boolean }) => number,
 ): boolean {
   let ok = true;
   if (claudeOnPath()) {
@@ -522,7 +567,7 @@ function wireClaude(
     try {
       // Inside the try so a read-only config surfaces as the container case
       // rather than an unhandled throw.
-      runClaude(["mcp", "remove", "--scope", "user", "board"]);
+      runClaude(["mcp", "remove", "--scope", "user", "board"], { quiet: true });
       if (runClaude(args) === 0) {
         io.stdout("wired: claude mcp (user scope)");
       } else {
@@ -578,7 +623,7 @@ function wireAgent(
   token: string,
   io: CommandIo,
   claudeOnPath: () => boolean,
-  runClaude: (args: string[]) => number,
+  runClaude: (args: string[], opts?: { quiet?: boolean }) => number,
 ): boolean {
   switch (agent) {
     case "opencode":
@@ -659,14 +704,42 @@ export function runInstallCommand({
     let ok = copySkills(agentSkillsRoot(agent), io);
     const token = mintToken(db, agent, force, io);
     if (token !== null) {
-      // Print-once discipline (invariant 8): the token is stored hashed, so
-      // this is the only time the plaintext exists after the mint — if the
-      // agent config is lost, the fix is a --force re-mint, not a re-show.
+      const wiredOk = wireAgent(
+        agent,
+        token.token,
+        io,
+        claudeOnPath,
+        runClaude,
+      );
+      ok = wiredOk && ok;
+      // Print-once discipline (invariant 8): the plaintext exists only at mint
+      // time, so this is the one chance to surface it. Deliberately NOT
+      // suppressed when wiring stored it — a mint only happens on a first
+      // install for an agent (a re-run without --force takes the re-wire path
+      // below and prints nothing), so the exposure is once per data dir, and
+      // printing is the fail-safe direction if the config write is not what it
+      // claims to be.
       io.stdout(
         `token for "${token.name}" (store it now — it is stored hashed and cannot be shown again):`,
       );
       io.stdout(token.token);
-      ok = wireAgent(agent, token.token, io, claudeOnPath, runClaude) && ok;
+      // Which is exactly what this checks. `claude mcp add` on a name that
+      // already exists printed "already exists", exited 0 and wrote nothing
+      // (#9) — so a successful-looking wire is not evidence the credential
+      // landed. Read it back from the config and say so loudly when it did
+      // not, instead of leaving every later call to 401 with no explanation.
+      // Only the two agents we wire automatically store anything: codex and pi
+      // print a snippet for the human, and claude stores nothing when its CLI
+      // is absent.
+      const stores =
+        agent === "opencode" || (agent === "claude" && claudeOnPath());
+      if (wiredOk && stores && readWiredToken(agent) !== token.token) {
+        ok = false;
+        io.stderr(
+          `board: ${agent} reported a successful wire, but its config does not hold the new credential — ` +
+            "every board call would 401. Re-run: make install FLAGS=--force",
+        );
+      }
     } else {
       // Nothing minted, so this agent already has a live credential. Rewrite
       // its MCP entry around the token already in its config (D28) — that is
