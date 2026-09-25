@@ -1,18 +1,19 @@
-import { buildBundle, importBoard, readImportBody } from "../bundle.ts";
-import { boardsWithCounts } from "../comments.ts";
-import type { Board, BoardStatus } from "../domain.ts";
-import { HttpError, jsonOk } from "../http.ts";
 import {
-  BoardNotFound,
+  type BoardFilters,
   createBoard,
   endBoard,
-  getBoard,
+  filterBoards,
   getVersion,
   listVersions,
   publishVersion,
+  requireBoard,
   restoreVersion,
   VersionNotFound,
-} from "../store.ts";
+} from "../boards.ts";
+import { buildBundle } from "../bundle-export.ts";
+import { importBoard, readImportBody } from "../bundle-import.ts";
+import { boardsWithCounts, countUnresolvedRoots } from "../comments.ts";
+import { HttpError, jsonOk } from "../http.ts";
 import {
   asEnum,
   asInt,
@@ -30,24 +31,6 @@ import {
 
 const BOARD_FORMATS = ["markdown", "html"] as const;
 const BOARD_STATUSES = ["open", "ended"] as const;
-
-interface BoardFilters {
-  status?: BoardStatus;
-  tag?: string;
-  author?: string;
-}
-
-export function filterBoards<T extends Board>(
-  boards: T[],
-  filters: BoardFilters,
-): T[] {
-  return boards.filter(
-    (board) =>
-      (filters.status === undefined || board.status === filters.status) &&
-      (filters.tag === undefined || board.tags.includes(filters.tag)) &&
-      (filters.author === undefined || board.created_by === filters.author),
-  );
-}
 
 function createBoardHandler(_req: Request, ctx: RequestContext): Response {
   const body = bodyFields(ctx.body);
@@ -76,19 +59,32 @@ function listBoardsHandler(req: Request, ctx: RequestContext): Response {
   return jsonOk(filterBoards(boardsWithCounts(ctx.db), filters));
 }
 
+// unresolved_comments rides the ENVELOPE (F15), not the board object, so a
+// client never re-derives the server's counting rule: it is countUnresolvedRoots,
+// the same function behind the list route's column, so the two cannot disagree.
+//
+// Why the envelope and not inside `board`: the board_get MCP tool returns
+// {board, versions} with a plain Board, so decorating `board` here would make
+// that field mean two different things depending on the surface you came
+// through — the exact MCP/REST divergence A10 exists to close. The list route
+// decorates its rows instead because a list has no envelope to hang a per-board
+// count on.
 function getBoardHandler(_req: Request, ctx: RequestContext): Response {
-  const board = getBoard(ctx.db, ctx.params.id);
-  if (board === null) {
-    throw new BoardNotFound(ctx.params.id);
-  }
-  return jsonOk({ board, versions: listVersions(ctx.db, ctx.params.id) });
+  const boardId = ctx.params.id;
+  const board = requireBoard(ctx.db, boardId);
+  return jsonOk({
+    board,
+    versions: listVersions(ctx.db, boardId),
+    unresolved_comments: countUnresolvedRoots(ctx.db, boardId),
+  });
 }
 
+// The board check stays even though getVersion below also 404s: it is what
+// distinguishes an unknown board (404 board_not_found) from a known board
+// without that version (404 version_not_found).
 function getVersionHandler(_req: Request, ctx: RequestContext): Response {
   const boardId = ctx.params.id;
-  if (getBoard(ctx.db, boardId) === null) {
-    throw new BoardNotFound(boardId);
-  }
+  requireBoard(ctx.db, boardId);
   const n = asNonNegativeIntString(ctx.params.n, "n");
   if (n === undefined) {
     throw new HttpError(
@@ -125,12 +121,9 @@ function endHandler(_req: Request, ctx: RequestContext): Response {
   return jsonOk(board);
 }
 
-async function restoreHandler(
-  _req: Request,
-  ctx: RequestContext,
-): Promise<Response> {
+function restoreHandler(_req: Request, ctx: RequestContext): Response {
   const body = bodyFields(ctx.body);
-  const version = await restoreVersion(ctx.db, ctx.dataDir, ctx.params.id, {
+  const version = restoreVersion(ctx.db, ctx.dataDir, ctx.params.id, {
     from_n: asInt(body.from_n, "from_n"),
     expected_version: asInt(body.expected_version, "expected_version"),
     actor: actorName(ctx),
@@ -142,9 +135,8 @@ async function restoreHandler(
 // boards (end → writes 409, reads stay — docs/plan.md).
 function exportHandler(_req: Request, ctx: RequestContext): Response {
   const id = ctx.params.id;
-  if (getBoard(ctx.db, id) === null) {
-    throw new BoardNotFound(id);
-  }
+  // no board pre-check: buildBundle gates on requireBoard and throws the same
+  // BoardNotFound
   const zip = buildBundle(ctx.db, ctx.dataDir, id);
   // Uint8Array.from copies into an ArrayBuffer-backed body (Response wants
   // Uint8Array<ArrayBuffer>; boards are small — buffering is the deal)

@@ -1,21 +1,12 @@
-import { useEffect, useState } from "react";
-import { listTokens, type TokenRow } from "../api.ts";
+import { listTokens } from "../api.ts";
 import { formatDate } from "../format.ts";
+import { useLoad } from "../use-load.ts";
 
 // Read-only token inventory. No values column, ever: token values are
 // SHA-256 hashed server-side and never returned (invariant 7,
 // docs/security.md) — this table is the audit surface, not a keyring.
 export function TokensPanel() {
-  const [tokens, setTokens] = useState<TokenRow[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    listTokens()
-      .then(setTokens)
-      .catch((err: unknown) => {
-        setError(err instanceof Error ? err.message : "failed to load tokens");
-      });
-  }, []);
+  const { data: tokens, error } = useLoad(listTokens, "failed to load tokens");
 
   return (
     <section className="audit-panel" aria-label="Tokens">

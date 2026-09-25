@@ -2,25 +2,25 @@ import type { Database } from "bun:sqlite";
 import type { Document, Element } from "happy-dom";
 import { Window } from "happy-dom";
 import { getAsset } from "./assets.ts";
+import {
+  getVersion,
+  listBoards,
+  requireBoard,
+  requireOpenBoard,
+  StoreError,
+  VersionNotFound,
+} from "./boards.ts";
 import type {
   Actor,
   Anchor,
   Board,
+  BoardStatus,
   Comment,
   ImageOverlay,
   Version,
 } from "./domain.ts";
-import { appendEventDb, mirrorEventFiles } from "./events.ts";
+import { appendEventDb, type EventInput, mirrorEventFiles } from "./events.ts";
 import { shortId } from "./ids.ts";
-import {
-  BoardEnded,
-  BoardNotFound,
-  getBoard,
-  getVersion,
-  listBoards,
-  StoreError,
-  VersionNotFound,
-} from "./store.ts";
 import { countSubscribersByBoard } from "./webhooks.ts";
 
 export class InvalidAnchor extends StoreError {
@@ -215,6 +215,48 @@ function validateOverlay(overlay: ImageOverlay): void {
 const INSERT_COMMENT =
   "INSERT INTO comments (id, board_id, version_n, anchor, body, author, in_reply_to, created_at, seq) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
+interface CommentFields {
+  board_id: string;
+  version_n: number;
+  anchor: Anchor;
+  body: string;
+  author: string;
+  in_reply_to: string | null;
+}
+
+// The atomicity rule for comment writes, in one place: no comment row without
+// the event that announced it, so the row and the event commit in the SAME
+// transaction and the row carries that event's seq (which is also the cursor
+// agents page by). The jsonl mirrors are written AFTER the commit — mirrors
+// may lag the db, never lead it (mirrorEventFiles in events.ts). Callers mint
+// the id because the event payload names it too.
+function insertCommentWithEvent(
+  db: Database,
+  dataDir: string,
+  id: string,
+  fields: CommentFields,
+  event: EventInput,
+): Comment {
+  const write = db.transaction(() => {
+    const ev = appendEventDb(db, event);
+    db.prepare(INSERT_COMMENT).run(
+      id,
+      fields.board_id,
+      fields.version_n,
+      JSON.stringify(fields.anchor),
+      fields.body,
+      fields.author,
+      fields.in_reply_to,
+      new Date().toISOString(),
+      ev.seq,
+    );
+    return ev;
+  });
+  const ev = write();
+  mirrorEventFiles(dataDir, ev);
+  return getComment(db, id) as Comment;
+}
+
 // The overlay IS the payload — a root comment anchored to an image with at
 // least one drawn arrow or box may have an empty/absent body (forcing text
 // produced "." posts in dogfood). Everything else still requires text:
@@ -235,14 +277,8 @@ export function createComment(
   boardId: string,
   input: CreateCommentInput,
 ): Comment {
-  const board = getBoard(db, boardId);
-  if (board === null) {
-    throw new BoardNotFound(boardId);
-  }
   // comments are writes: ended boards are read-only (docs/plan.md end → writes 409)
-  if (board.status !== "open") {
-    throw new BoardEnded(boardId);
-  }
+  requireOpenBoard(db, boardId);
   const version = getVersion(db, boardId, input.version_n);
   if (version === null) {
     throw new VersionNotFound(boardId, input.version_n);
@@ -263,8 +299,19 @@ export function createComment(
     }
   }
   const id = shortId();
-  const write = db.transaction(() => {
-    const ev = appendEventDb(db, {
+  return insertCommentWithEvent(
+    db,
+    dataDir,
+    id,
+    {
+      board_id: boardId,
+      version_n: input.version_n,
+      anchor: input.anchor,
+      body: input.body,
+      author: input.actor,
+      in_reply_to: input.in_reply_to ?? null,
+    },
+    {
       actor: input.actor,
       type: "comment.created",
       boardId,
@@ -273,23 +320,8 @@ export function createComment(
         version_n: input.version_n,
         anchor: input.anchor,
       },
-    });
-    db.prepare(INSERT_COMMENT).run(
-      id,
-      boardId,
-      input.version_n,
-      JSON.stringify(input.anchor),
-      input.body,
-      input.actor,
-      input.in_reply_to ?? null,
-      new Date().toISOString(),
-      ev.seq,
-    );
-    return ev;
-  });
-  const ev = write();
-  mirrorEventFiles(dataDir, ev);
-  return getComment(db, id) as Comment;
+    },
+  );
 }
 
 export function getComment(db: Database, id: string): Comment | null {
@@ -337,37 +369,27 @@ export function replyComment(
   if (input.body.trim().length === 0) {
     throw new CommentBodyRequired("reply body must not be empty");
   }
-  const board = getBoard(db, parent.board_id);
-  if (board === null) {
-    throw new BoardNotFound(parent.board_id);
-  }
-  if (board.status !== "open") {
-    throw new BoardEnded(parent.board_id);
-  }
+  requireOpenBoard(db, parent.board_id);
   const id = shortId();
-  const write = db.transaction(() => {
-    const ev = appendEventDb(db, {
+  return insertCommentWithEvent(
+    db,
+    dataDir,
+    id,
+    {
+      board_id: parent.board_id,
+      version_n: parent.version_n,
+      anchor: parent.anchor,
+      body: input.body,
+      author: input.actor,
+      in_reply_to: commentId,
+    },
+    {
       actor: input.actor,
       type: "comment.replied",
       boardId: parent.board_id,
       payload: { comment_id: id, parent_id: commentId },
-    });
-    db.prepare(INSERT_COMMENT).run(
-      id,
-      parent.board_id,
-      parent.version_n,
-      JSON.stringify(parent.anchor),
-      input.body,
-      input.actor,
-      commentId,
-      new Date().toISOString(),
-      ev.seq,
-    );
-    return ev;
-  });
-  const ev = write();
-  mirrorEventFiles(dataDir, ev);
-  return getComment(db, id) as Comment;
+    },
+  );
 }
 
 // Idempotent: an already-resolved comment returns as-is, no second event.
@@ -384,13 +406,7 @@ export function resolveComment(
   if (comment.resolved_at !== null) {
     return comment;
   }
-  const board = getBoard(db, comment.board_id);
-  if (board === null) {
-    throw new BoardNotFound(comment.board_id);
-  }
-  if (board.status !== "open") {
-    throw new BoardEnded(comment.board_id);
-  }
+  requireOpenBoard(db, comment.board_id);
   const write = db.transaction(() => {
     const ev = appendEventDb(db, {
       actor,
@@ -435,9 +451,7 @@ export function listCommentsPage(
   actor: Actor | undefined,
   since?: number,
 ): { comments: Comment[]; last_seq: number } {
-  if (getBoard(db, boardId) === null) {
-    throw new BoardNotFound(boardId);
-  }
+  requireBoard(db, boardId);
   recordCursorPresence(db, boardId, actor);
   const comments = listComments(db, boardId, since);
   const lastSeq = maxCommentSeq(db, boardId);
@@ -464,6 +478,54 @@ export function boardsWithCounts(db: Database): BoardWithCommentCounts[] {
     unresolved_comments: countUnresolvedRoots(db, board.id),
     subscriber_count: subscribers.get(board.id) ?? 0,
   }));
+}
+
+export interface BoardStatusSummary {
+  status: "ok";
+  boards: { open: number; ended: number };
+  subscribers: number;
+  board?: {
+    id: string;
+    status: BoardStatus;
+    current_version: number;
+    unresolved_comments: number;
+  };
+}
+
+// The board_status payload. board_status is the one MCP tool with no REST
+// counterpart, which is exactly why it belongs here and not in mcp.ts: the
+// transport layer runs no SQL of its own, so docs/architecture.md's claim that
+// MCP tools "call the same service-layer functions the REST routes call" holds
+// for every tool. Lives in comments.ts (not boards.ts) for the same reason
+// boardsWithCounts does — it joins boards with comment and subscriber counts,
+// and boards.ts must not import either.
+export function boardStatusSummary(
+  db: Database,
+  boardId?: string,
+): BoardStatusSummary {
+  const boards = listBoards(db);
+  let subscribers = 0;
+  for (const count of countSubscribersByBoard(db).values()) {
+    subscribers += count;
+  }
+  const summary: BoardStatusSummary = {
+    status: "ok",
+    boards: {
+      open: boards.filter((board) => board.status === "open").length,
+      ended: boards.filter((board) => board.status === "ended").length,
+    },
+    subscribers,
+  };
+  if (boardId !== undefined) {
+    const board = requireBoard(db, boardId);
+    summary.board = {
+      id: board.id,
+      status: board.status,
+      current_version: board.current_version,
+      unresolved_comments: countUnresolvedRoots(db, board.id),
+    };
+  }
+  return summary;
 }
 
 // Cursor reads double as agent presence (docs/plan.md "Subscriptions, callbacks

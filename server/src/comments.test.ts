@@ -5,6 +5,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ingestAsset } from "./assets.ts";
 import {
+  BoardEnded,
+  BoardNotFound,
+  createBoard,
+  endBoard,
+  publishVersion,
+  VersionNotFound,
+} from "./boards.ts";
+import {
   boardsWithCounts,
   CommentBodyRequired,
   CommentNotFound,
@@ -22,14 +30,6 @@ import {
 import { openDb } from "./db.ts";
 import type { Anchor, ImageOverlay, Version } from "./domain.ts";
 import { getEvents } from "./events.ts";
-import {
-  BoardEnded,
-  BoardNotFound,
-  createBoard,
-  endBoard,
-  publishVersion,
-  VersionNotFound,
-} from "./store.ts";
 
 const MD = `# Heading
 

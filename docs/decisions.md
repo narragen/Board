@@ -1,6 +1,40 @@
 # Decision log
 
-ADR-style, oldest first. Entries are append-only: superseding a decision adds a new entry that references the old one; entries are never edited after acceptance.
+ADR-style, oldest first. Entries are append-only: superseding a decision adds a new entry that references the old one; entries are never edited after acceptance. A superseded entry carries a `>` annotation under its heading pointing at its successor — the annotation is an addition, never a rewrite of the ruling.
+
+> **Reading a `D<n>` reference in code.** `D18` is the entry below. **`D23 D4`** is different: D23 bundles six lettered sub-rulings of its own, so `D23 D4` means D23's fourth sub-ruling (connector explicit targeting), not D4.
+
+| # | Decision | Date |
+|---|---|---|
+| D1 | Build from scratch, not a fork | 2026-09-15 |
+| D2 | TypeScript + Bun, raw `Bun.serve`, no web framework | 2026-09-15 |
+| D3 | Async-only agent feedback | 2026-09-15 |
+| D4 | Phased anchoring — *superseded in part by D18* | 2026-09-15 |
+| D5 | One document model (HTML), two display modes — *superseded by D18* | 2026-09-15 |
+| D6 | SQLite source of truth + self-contained board bundles | 2026-09-15 |
+| D7 | Two-origin sandboxing — *superseded by D18* | 2026-09-15 |
+| D8 | Vendored, pinned sandbox libraries — *superseded in part by D18 + D26* | 2026-09-15 |
+| D9 | MCP Streamable HTTP + REST parity; events as substrate | 2026-09-15 |
+| D10 | Makefile as the operational interface | 2026-09-15 |
+| D11 | Patched happy-dom for DOMPurify correctness | 2026-09-15 |
+| D12 | Mermaid renders client-side in the host chrome | 2026-09-15 |
+| D13 | SSE auth via query param; client-held cursors | 2026-09-15 |
+| D14 | Agent-managed daemon lifecycle — phase 2 (delivered by D20) | 2026-09-15 |
+| D15 | One agent-facing consumption path: comments only | 2026-09-15 |
+| D16 | MCP over stateless JSON-mode Streamable HTTP | 2026-09-15 |
+| D17 | Token names are permanent; `--force` mints suffixed | 2026-09-15 |
+| D18 | **Full host-render: agent HTML runs in the app origin** | 2026-09-15 |
+| D19 | The `sse` presence kind is removed; sessions expire | 2026-09-16 |
+| D20 | Agent-managed session instances (`board up` / `board down`) — *amended by D22* | 2026-09-16 |
+| D21 | The shared daemon is optional; setup is one command | 2026-09-17 |
+| D22 | MCP wiring ships a local stdio connector (`board mcp`) — *amended by D23 D4* | 2026-09-17 |
+| D23 | Collaboration boards: lifecycle, durability, targeting (six sub-rulings) | 2026-09-22 |
+| D24 | `install` writes opencode v2's native MCP shape; v1 dropped | 2026-09-24 |
+| D25 | `interview`: interactive scoping boards + the CSS-scoping rule | 2026-09-24 |
+| D26 | The app owns agent-board CSS; `interview` is the skill's name | 2026-09-24 |
+| D27 | Round 2 findings: boards share a global scope; Tailwind leaks its style tag | 2026-09-24 |
+| D28 | Round 2 rulings: re-wire without rotating, a chart palette, Tailwind baseline | 2026-09-24 |
+| D29 | A skill carries its own files; a container says when its state is disposable | 2026-09-24 |
 
 ## D1 — Build from scratch, not a fork — 2026-09-15
 
@@ -22,11 +56,15 @@ ADR-style, oldest first. Entries are append-only: superseding a decision adds a 
 
 ## D4 — Phased anchoring — 2026-09-15
 
+> **Superseded in part by D18.** The v1.1 bridge overlay was dropped and full anchoring — sections, text highlights, rows, images — landed on every board, html included. The phasing below never played out.
+
 - **Context:** Full in-HTML anchoring (the bridge overlay) is the single hardest component.
 - **Decision (user):** v1 = sections + text highlights + table rows on markdown-derived boards (host-chrome rendering) and `data-ba` section markers on HTML boards; v1.1 = bridge overlay for in-iframe anchoring.
 - **Consequences:** Core value lands early; text comments inside HTML boards wait for v1.1; the anchor schema is designed bridge-compatible from day one.
 
 ## D5 — One document model (HTML), two display modes — 2026-09-15
+
+> **Superseded by D18.** The second display mode is gone: authored HTML mounts in the host chrome, not a sandboxed iframe. The one-stored-document half of this ruling still holds.
 
 - **Context:** Pure HTML-only-everything-in-iframe would drop v1 text-highlight anchoring; two *stored* types would split the pipeline.
 - **Decision (user question):** Every version is one HTML document; `format` is input convenience. Markdown renders at publish with auto-injected anchors and displays in the host chrome (script-free by construction); authored HTML displays in the sandboxed iframe.
@@ -40,11 +78,15 @@ ADR-style, oldest first. Entries are append-only: superseding a decision adds a 
 
 ## D7 — Two-origin sandboxing — 2026-09-15
 
+> **Superseded by D18.** The board origin (`:7801`), the sandbox iframe, and the planned postMessage bridge were all removed; the host CSP is the only guard now.
+
 - **Context:** Agent-authored HTML must never touch trusted chrome.
 - **Decision:** Host `:7800` / board origin `:7801`; `sandbox="allow-scripts"` only; strict CSPs ([security.md](security.md)).
 - **Consequences:** Defense in depth against malicious boards; board↔host communication must go through a nonce-handshaked postMessage bridge (v1.1).
 
 ## D8 — Vendored, pinned sandbox libraries — 2026-09-15
+
+> **Superseded in part by D18 and D26.** The board origin these were served from is gone — `/libs/*` is served by the host (D18) — and the shipped list is not the one below. `server/libs/` holds **chart.js 4.4.9** and **tailwind 4.3.3** (vendored by D26, which describes itself as executing the never-executed half of D8); mermaid ships as a `web/` npm dep and katex as a `server/` one, bundled into the app rather than served from `/libs/*`; plotly never shipped. `server/libs/README.md` is the current inventory.
 
 - **Context:** Boards need common libraries without runtime CDNs.
 - **Decision (user):** mermaid, tailwind (play-cdn script), plotly, katex — vendored, exact pins, served from the board origin.
@@ -64,7 +106,7 @@ ADR-style, oldest first. Entries are append-only: superseding a decision adds a 
 
 ## D11 — Patched happy-dom for DOMPurify correctness — 2026-09-15
 
-- **Context:** Server-side markdown sanitization (invariant 6) runs DOMPurify against a happy-dom window. Under the pinned versions (happy-dom 20.x, dompurify 3.4.x) two happy-dom bugs silently break sanitization: the base `Node.prototype.nodeName` getter returns `""` (every element classifies as tag `""` and gets stripped, hoisting script content into text), and `NodeIterator` stops after the first mid-walk removal (everything following a removed node escapes sanitization).
+- **Context:** Server-side markdown sanitization (invariant 5, markdown through DOMPurify) runs DOMPurify against a happy-dom window. Under the pinned versions (happy-dom 20.x, dompurify 3.4.x) two happy-dom bugs silently break sanitization: the base `Node.prototype.nodeName` getter returns `""` (every element classifies as tag `""` and gets stripped, hoisting script content into text), and `NodeIterator` stops after the first mid-walk removal (everything following a removed node escapes sanitization).
 - **Decision:** Ship two minimal, why-commented compatibility patches in `server/src/render.ts` — a receiver-correct spec `nodeName` getter and a removal-robust pre-order `createNodeIterator` replacement installed on the exact document DOMPurify caches from — guarded by the golden-document render test and adversarial mXSS-shaped probes.
 - **Consequences:** Sanitization is actually correct under Bun today; the patches are coupled to DOMPurify's caching internals, so any `bun update` of dompurify/happy-dom must re-run the render suite (the probes fail loudly if the patches stop applying). Revisit when either library fixes the underlying bugs.
 
@@ -81,6 +123,8 @@ ADR-style, oldest first. Entries are append-only: superseding a decision adds a 
 - **Consequences:** Browser SSE works without cookies; presence (M5) can show "listening" agents derived from real cursor reads. A server-acked backlog remains a phase-2 option if agent crash-recovery proves to need it.
 
 ## D14 — Agent-managed daemon lifecycle — phase 2 — 2026-09-15
+
+> **Delivered by D20.** The deferred decision — full agent lifecycle management with explicit safety boundaries — is D20 (session instances, `board up` / `board down`). The MVP premise below, that the human keeps the server running, was itself reframed by D21: the shared daemon is optional, and the default answer to a down daemon is a session instance, not `make serve`. The MCP-only `board_status` roll-up this entry introduced still stands.
 
 - **Context:** D10 made the Makefile the operational interface with no auto-spawn magic. The seamless workflow — an agent mid-task spins up boardd when it needs a human decision, shares a session link, and owns the daemon lifecycle — is the natural endgame for the dogfood loop.
 - **Decision (user, 2026-09-15):** Defer to phase 2. For the MVP the human keeps the server running; the `board_status` tool and the skill detect a down daemon and instruct recovery (`make serve`). Full agent lifecycle management (spawn via tmux/nohup, link sharing, shutdown) gets its own decision later, with explicit safety boundaries.
@@ -122,13 +166,15 @@ ADR-style, oldest first. Entries are append-only: superseding a decision adds a 
 
 ## D20 — Agent-managed session instances (`board up` / `board down`) — 2026-09-16
 
+> **Amended by D22.** One safety boundary below no longer holds as written: "MCP wiring is static … so the session loop rides REST/CLI with the instance token" — the D22 stdio connector reaches session instances over MCP too (REST/CLI remain canonical for multi-instance work). Everything else — temp data dirs, pinned loopback bind, the 0600 credential file, verified-pid teardown, the registry — stands.
+
 - **Context:** D14 deferred full agent lifecycle management to "its own decision later, with explicit safety boundaries." The friction it left is real: an agent mid-task that wants a human decision must detect a down daemon and stop to ask the human to run `make serve` (the skill's documented recovery path). The owner asked for the agent to own the whole loop: spin up, publish, share a link, iterate, close.
 - **Decision (owner, 2026-09-16):** the `board` CLI grows session-instance lifecycle commands. `board up [file]` spawns a **background ephemeral daemon** — OS-tmp data dir, kernel-assigned port (`BOARD_PORT=0`), loopback bind and Host-allowlist pinned regardless of inherited env — mints one agent token before spawn, optionally publishes a first board and prints a one-time human exchange link. `board down` ends open boards, exports each as a zip keepsake, stops the process, and purges the temp data dir and credential env file. A registry at `<BOARD_DATA_DIR>/instances/<id>/` (`instance.json` — never tokens — plus `daemon.log`, `env`, `boards/`) is the discovery substrate for `board instances`.
 - **Safety boundaries (explicit, per D14's promise):**
   - The **shared daemon and persistent `~/.board` data stay human-managed** — D10's no-auto-spawn rationale is untouched for persistent state; only throwaway instances are agent-owned. Session data dirs are always OS-tmp, never under `~/.board`.
   - Loopback bind + Host-header allowlist are pinned on spawn: an inherited `BOARD_HOST=0.0.0.0` or widened `BOARD_BIND` cannot widen a session instance.
   - Auth unchanged: bearer agent token (hashed in the instance db, plaintext printed once by `up`); human access only via the one-time exchange link.
-  - **Credential env file:** `up` writes `<instances>/<id>/env` (mode 0600: `BOARD_INSTANCE`, `BOARD_PORT`, `BOARD_TOKEN`) so agent shells can `source` it; it is deleted on `down`/prune. This is a session-credential *delivery* artifact (the human's localStorage bearer is the analogue), not a token store — invariant 7 (hashed at rest) still governs every db. Named risk, owner-accepted: a plaintext credential briefly at rest in the user's own data dir, ephemeral lifetime, never logged or committed.
+  - **Credential env file:** `up` writes `<instances>/<id>/env` (mode 0600: `BOARD_INSTANCE`, `BOARD_PORT`, `BOARD_TOKEN`) so agent shells can `source` it; it is deleted on `down`/prune. This is a session-credential *delivery* artifact (the human's localStorage bearer is the analogue), not a token store — invariant 7 (tokens stored hashed) still governs every db. Named risk, owner-accepted: a plaintext credential briefly at rest in the user's own data dir, ephemeral lifetime, never logged or committed.
   - **Teardown signals only verified pids:** `/proc/<pid>/cmdline` match (plus an environ `BOARD_DATA_DIR` match when readable) before any signal — a recycled pid is never killed. A dead instance still yields keepsake zips from its on-disk bundles, then cleans up.
   - MCP wiring is static (it points at the shared daemon's fixed port), so the session loop rides REST/CLI with the instance token; the skill teaches it. No new REST routes.
 - **Consequences:** `make up/down/instances` wrappers follow (D10 pattern); the skill gains the session loop (up → source env → REST publish/poll → down); `board up` self-heals by pruning stale registry entries; `down` keeps `boards/*.zip`, `instance.json`, and `daemon.log` as the audit keepsake (re-importable via `make import`). In-flight webhook deliveries may be dropped at teardown — cursor polling (D15) stays the reliable consumption path for sessions.
@@ -140,6 +186,8 @@ ADR-style, oldest first. Entries are append-only: superseding a decision adds a 
 - **Consequences:** README/deployment reframe (daemon = optional library, never a setup prerequisite); the skill's daemon-down guidance flips — default to a session instance, ask the human to start the shared daemon only when the task needs the persistent library; no security boundary changes (loopback, auth, D20 teardown, everything unchanged); `make install` still wires MCP at `:7800` so the tools light up whenever the daemon IS up.
 
 ## D22 — MCP wiring ships a local stdio connector (`board mcp`) — 2026-09-17
+
+> **Amended by D23 D4.** The auto-resolution below is no longer the whole rule: explicit targets — a `BOARD_INSTANCE` env (strict), then a `board_connect` pin — now precede it, and the listed tool surface is 15 (the 13 here plus the two connector-local ones). The live precedence, including the last-resort branch this entry's text omits, is [architecture.md](architecture.md#connector-backend-resolution) "Connector backend resolution"; the newest-first routing ambiguity in the consequences survives only as the zero-config single-agent default.
 
 - **Context:** D21's closing consequence — "`make install` still wires MCP at `:7800` so the tools light up whenever the daemon IS up" — was false in practice. The installer wired opencode as a `remote` MCP entry pointing at `http://127.0.0.1:7800/mcp`, but post-D21 the shared daemon is optional and usually down, and opencode never retries a failed remote MCP: the entry sat permanently "failed" in the default daemon-down state, and the wired tools could not light up against a running session instance (D20) either. Owner direction (2026-09-17): MCP should be available whenever an agent actually has a board server up — agent-spun session instances included — with no human `make serve` requirement.
 - **Decision (owner, 2026-09-17):** the shipped MCP wiring is a **local stdio connector** — `board mcp`, also runnable as `node cli/src/mcp-connector.ts` (agent harness PATHs have node, not reliably bun, so the connector's import graph is node-runnable under type-stripping). It answers `initialize`/`ping` locally, lists the 13 tools offline from the single-source manifest (`server/src/mcp-tools.ts`), and re-resolves a real backend **per request**: the shared daemon when healthy with a `BOARD_MCP_TOKEN` env present, else the newest healthy session instance from the D20 registry (`<BOARD_DATA_DIR>/instances/` — loopback-only structural guard, credential from the 0600 env file), else an actionable `isError` tool result pointing at `make up` / `make serve`. **No auto-spawn ever** — the connector never starts a daemon (D10/D20 untouched); it only reads env/registry and proxies HTTP to loopback backends.
@@ -155,7 +203,7 @@ ADR-style, oldest first. Entries are append-only: superseding a decision adds a 
   - **D4 — ruled with a redirect (on-board 2026-09-22):** explicit targeting approved, and the owner redirected the shape — agents get **a discovery tool** (list the local servers actually up — shared daemon + live instances — and the boards on each), **explicit connect** to an existing server/board with a manager-minted code/token, and **ask-the-human when new-board-vs-connect-existing is ambiguous — never silently pick** ("let's not try to be too clever, let's just be explicit"). `BOARD_INSTANCE` env remains the scripted/no-dialog path; D22's zero-config single-agent default is untouched — the redirect governs multi-agent collaboration, replacing silent newest-healthy routing there. Not implemented in this change (docs/skill only); it is the next PR after the D22 connector merges. **Implemented (2026-09-22, the follow-through PR):** the implementation amends D22's per-request resolution — explicit targets (env `BOARD_INSTANCE`, then a `board_connect` pin) take precedence over auto-resolution, which remains only the zero-config single-agent default — and the two tools are connector-local (marked in the single-source manifest; the connector lists + handles them, the daemon's `/mcp` omits them from its listing and answers a direct call with a named error). The token-as-tool-param exposure (`board_connect {url, token}`) is the same accepted plaintext-credential class as D17/D22 (agent-config env, handed over out of band, never logged).
   - **D5 — executed, agreed on-board with a mechanism correction:** the brief recommended `--network host`, but this host's engine is Docker Desktop (WSL2 backend), where host networking binds inside the DD VM and never reaches Windows localhost — inert. The executed form is the documented published-port equivalent ([deployment.md](deployment.md) "Docker"): container env `BOARD_DATA_DIR=/home/node/board` (persistent mount), daemon bind widened at serve only, port published as `--publish=127.0.0.1:7800:7800` — agentbox wrapper syntax `agentbox run --docker-arg "--publish=127.0.0.1:7800:7800"`, single token, no inner spaces: the spaced form fails with `docker: invalid IP address` because docker's parser glues a leading space onto the IP. Same guarantees as the documented form: loopback-only exposure on the host, durable state, the human browses via the host's localhost forward. Also recorded: session instances are structurally loopback + kernel-random port (D20 boundary, enforced in `cli/src/instances.ts` spawn env), so an agent-owned *instance* cannot serve the published fixed port today — a deliberate code change, candidate follow-through alongside D4.
   - **D6 — accepted, strengthened:** boards are vehicles, never homes — no sync, no cloud, no persistence roadmap beyond zip export. Strengthening: the constraint goes into the Board skill itself, instructing agents explicitly that durable items (decisions made, plans approved, takeaways) are saved off-board (repo/docs) before a review cycle closes.
-- **Consequences:** [deployment.md](deployment.md) gains the single-container section (the executed D5 shape, referencing the existing two-forms section — invariant 1 stands: loopback-only on the host, nothing widened); the Board skill gains the collaboration recipe (D2), the vehicles-never-homes instruction (D6), and the agent-managed in-box server runbook (D1=A) as its portable board-domain knowledge; [plan.md](plan.md) notes D23 as post-plan doctrine. All six rulings are in — D4 ships no code in this change (docs/skill only); its redirected implementation (discovery + explicit connect + ask-when-ambiguous) is the follow-through PR, with the option-A live demo after it.
+- **Consequences:** [deployment.md](deployment.md) gains the single-container section (the executed D5 shape, referencing the existing two-forms section — invariant 1 (loopback bind) stands: loopback-only on the host, nothing widened); the Board skill gains the collaboration recipe (D2), the vehicles-never-homes instruction (D6), and the agent-managed in-box server runbook (D1=A) as its portable board-domain knowledge; [plan.md](plan.md) notes D23 as post-plan doctrine. All six rulings are in — D4 ships no code in this change (docs/skill only); its redirected implementation (discovery + explicit connect + ask-when-ambiguous) is the follow-through PR, with the option-A live demo after it.
 
 ## D24 — `install` writes opencode v2's native MCP shape; v1 support dropped — 2026-09-24
 
@@ -172,12 +220,12 @@ ADR-style, oldest first. Entries are append-only: superseding a decision adds a 
 - **Decision (owner, 2026-09-24, nine rulings across two rounds):**
   - **One `interview` skill** (`skills/interview/SKILL.md`), Board as its preferred transport, tailored to click-to-choose rather than a chat method with a board bolted on. Rounds are board *versions* of one board, so the design tree survives as immutable history.
   - **Ships a template** (`skills/templates/interview-round.html`) with a documented question schema. The submit call lives in that one file: when the narrow answer channel (NAR-1862) lands, one file changes instead of every board any agent ever published.
-  - **Six question types** — `pick_one`, `pick_many`, `confirm`, `rank`, `ask_text`, `ask_image`. `ask_file` was requested and **dropped**: asset ingest is an image-only mime allowlist with magic-byte verification, and invariant 6 exists precisely to stop that route becoming a general file reader. Document upload deserves its own threat model, not an allowlist widened in passing. No issue filed — it will arrive with a real use case.
+  - **Six question types** — `pick_one`, `pick_many`, `confirm`, `rank`, `ask_text`, `ask_image`. `ask_file` was requested and **dropped**: asset ingest is an image-only mime allowlist with magic-byte verification, and invariant 6 (verified asset ingest) exists precisely to stop that route becoming a general file reader. Document upload deserves its own threat model, not an allowlist widened in passing. No issue filed — it will arrive with a real use case.
   - **No daemon running → auto-start a session board** (`board up`, the D21 default); chat rounds only as a fallback, and they forfeit the structured answers.
   - **After publishing a round:** poll only when genuinely blocked (D3 unchanged). Fact-finding continues in parallel — a running exploration is an unsettled prerequisite, so only questions downstream of it wait.
   - **Every question carries a recommendation and a visible note field.** Both were load-bearing in the scoping session itself: the recommendations returned a five-question round in one pass, and the notes are where the owner overruled two of them.
   - **Durable outcomes are the agent's call**, declared before round 1. Suggestions offered (`docs/decisions.md`, `docs/decisions_{board_id}.md`); an issue tracker is never assumed to exist.
-  - **Auth stays the prototype path** — board html reads the reviewer's session token. Labeled as such; the exposure is NAR-1863; revisit when a second person reviews boards or a board arrives via import (imported html is re-rendered, not sanitized — invariant 5 exempts html by design).
+  - **Auth stays the prototype path** — board html reads the reviewer's session token. Labeled as such; the exposure is NAR-1863; revisit when a second person reviews boards or a board arrives via import (imported html is re-rendered, not sanitized — invariant 5, markdown through DOMPurify, exempts html by design).
   - **`install` ships both skills** and, on `EROFS`, names the real fix. The owner **narrowed this from the proposed bundle**: no `.agentbox/setup.sh` in this repo — "keep agentbox and Board separate," and an in-container install is not an expected workflow. A coupling that exists only in the narrative is not a reason to create one in the code.
 - **Consequences:** `skills/` now holds two skills; `copySkills` iterates `SKILL_NAMES`, so a third is one entry. The `EROFS` branch stops printing advice the human cannot follow — an agent sandbox mounts the host's skills directory read-only, so *no* in-container install can write there; the fix is a host install, which every later container inherits through the same mount. **A CSS-scoping rule is now documented** in [skills/board/SKILL.md](../skills/board/SKILL.md) and enforced by example in both templates: html boards mount into the host document with no iframe (D18), so a bare `body`, `*`, `h1` or `:root` rule restyles the board app itself — a stray `body { max-width: 760px }` cut the host content column from 1169px to 312px during this work, and `skills/templates/dashboard.html` had been shipping that same unscoped pattern since M4. A Claude Code plugin was considered for distribution and **rejected**: it would serve only one of the four harnesses `install` already wires.
 
@@ -212,7 +260,7 @@ ADR-style, oldest first. Entries are append-only: superseding a decision adds a 
 
 Ruled by the owner on board `nlHc77T540`, round 2. Four of five followed the recommendation; the Tailwind one overruled it.
 
-- **Re-wire an existing install using the credential already in its config (Q6, ruled C).** Rewriting an agent's MCP entry needs the plaintext token, and the plaintext only exists at mint time (stored hashed, invariant 7) — so refreshing a stale entry shape used to require `--force`, rotating every agent's credential on every update. But the plaintext is already in the file being rewritten. `readWiredToken()` reads it back — `mcp.servers.board.environment.BOARD_MCP_TOKEN` from opencode's config (falling back to the pre-D24 legacy path), `mcpServers.board.env.BOARD_MCP_TOKEN` from `~/.claude.json` — and the entry is rewritten around it. Nothing new is stored and nothing is printed. A shape change like D24 now reaches an existing install for free.
+- **Re-wire an existing install using the credential already in its config (Q6, ruled C).** Rewriting an agent's MCP entry needs the plaintext token, and the plaintext only exists at mint time (stored hashed — invariant 7, tokens stored hashed) — so refreshing a stale entry shape used to require `--force`, rotating every agent's credential on every update. But the plaintext is already in the file being rewritten. `readWiredToken()` reads it back — `mcp.servers.board.environment.BOARD_MCP_TOKEN` from opencode's config (falling back to the pre-D24 legacy path), `mcpServers.board.env.BOARD_MCP_TOKEN` from `~/.claude.json` — and the entry is rewritten around it. Nothing new is stored and nothing is printed. A shape change like D24 now reaches an existing install for free.
 - **Found while implementing it — `claude mcp add` on an existing name is a silent no-op.** It prints `MCP server board already exists in user config` and **exits 0** (measured against claude 2.1.282). We reported that as `wired: claude mcp (user scope)`. Under `--force` it was actively harmful: the old token was revoked, the new one never reached `~/.claude.json`, and every board tool call 401'd until someone hand-edited the file — the same class of silent config failure that opened this whole session. `wireClaude` now runs `claude mcp remove --scope user board` before every add, inside the same try so a read-only config still surfaces as the container case. Verified by round-tripping a real `claude mcp add`/`remove` against a throwaway `HOME`.
 - **The app exposes one chart helper (Q7, ruled A alone).** `window.boardChartTheme()` pushes Board's tokens into `Chart.defaults` and returns a seven-colour series palette. Tokens are re-read on every call because the theme follows `prefers-color-scheme`, so a cached palette is wrong for anyone on the other scheme. It **throws** when Chart.js is absent rather than no-opping — the failure it exists to prevent is a chart that renders in the wrong palette with nothing to explain it. The other three candidates (data-grid styling, layout utilities, a toast pattern) were declined: no board has needed them, and Tailwind now covers layout.
 - **Tailwind is the interview template's baseline (Q9 — overruled).** I recommended against it: 282 KB to style a questionnaire `.board-ui` already styles, plus a dependency the template does not need. Overruled, and the reasoning that beat mine is the same one that won in D26 — agents are trained on Tailwind, so a template that demonstrates it is a template agents can extend without reading anything. The template now loads it, uses utilities where they earn their place, and carries the colour rule (`bg-[var(--bg-subtle)]`, never `bg-white`) in its header. `.board-ui` still carries the page if Tailwind fails to load, so the degradation is graceful rather than broken. Known consequence, accepted: per D27 the injected `<style>` lands in `<head>` and outlives the board, so every session that opens one interview round now has Tailwind's base layer live for every later board.

@@ -1,4 +1,4 @@
-# never bake credentials into an image (invariant 8)
+# never bake credentials into an image (invariant 7, tokens stored hashed)
 .board-token
 .env
 .env.*

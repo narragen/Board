@@ -43,16 +43,18 @@ async function errorCode(res: Response): Promise<string> {
   return body.error.code;
 }
 
-// read the error body ONCE (a Response body cannot be consumed twice) and
-// hand out both the code and the raw text for message assertions
+// read the error body ONCE (a Response body cannot be consumed twice) and hand
+// out the code, the decoded message, and the raw text. Assert against `message`
+// when the expected substring contains quotes — `text` is still JSON-encoded,
+// so a quoted item name appears there escaped.
 async function errorBody(
   res: Response,
-): Promise<{ code: string; text: string }> {
+): Promise<{ code: string; message: string; text: string }> {
   const text = await res.text();
-  return {
-    code: (JSON.parse(text) as { error: { code: string } }).error.code,
-    text,
-  };
+  const error = (
+    JSON.parse(text) as { error: { code: string; message: string } }
+  ).error;
+  return { code: error.code, message: error.message, text };
 }
 
 async function makeBoard(
@@ -727,6 +729,416 @@ describe("dirty bundles are rejected (quarantine)", () => {
     const { text } = await errorBody(res);
     expect(text).toContain("assets/bbbbbbbbbb.png");
     expect(counts(f.s)).toEqual(before);
+  });
+
+  // The documented caps (docs/security.md "Content rules", "Assets") — spelled
+  // out rather than imported from the source under test, so moving one is a
+  // deliberate, visible change here too.
+  const DOC_CAP_BYTES = 8 * 1024 * 1024;
+  const BOARD_ASSET_CAP_BYTES = 8 * 1024 * 1024;
+
+  // Manifest surgery in one place: the strict-schema tests below all reach into
+  // the parsed manifest, edit it, and re-encode.
+  function patchManifest(
+    entries: Record<string, Uint8Array>,
+    edit: (manifest: Record<string, unknown>) => void,
+  ): void {
+    const manifest = JSON.parse(
+      strFromU8(entries["manifest.json"] ?? new Uint8Array()),
+    ) as Record<string, unknown>;
+    edit(manifest);
+    entries["manifest.json"] = new TextEncoder().encode(
+      JSON.stringify(manifest),
+    );
+  }
+
+  function manifestAssets(
+    manifest: Record<string, unknown>,
+  ): Array<Record<string, unknown>> {
+    return manifest.assets as Array<Record<string, unknown>>;
+  }
+
+  // A shape-valid manifest asset entry. The size-cap and shape tests declare
+  // these WITHOUT shipping bytes: the checks they exercise fire before the zip
+  // entry is looked up, so the fixtures stay bytes-free and fast.
+  function assetEntry(
+    overrides: Record<string, unknown> = {},
+  ): Record<string, unknown> {
+    return {
+      id: "aaaaaaaaaa",
+      file: "assets/aaaaaaaaaa.png",
+      mime: "image/png",
+      size: 32,
+      source: "copy",
+      created_by: "x",
+      created_at: "2026-09-15T00:00:00.000Z",
+      ...overrides,
+    };
+  }
+
+  // A shape-valid comments.json entry, for the tests that write that file from
+  // scratch (a simple board bundle carries an empty comments array).
+  function commentEntry(
+    overrides: Record<string, unknown> = {},
+  ): Record<string, unknown> {
+    return {
+      id: "cccccccccc",
+      version_n: 1,
+      anchor: { type: "board" },
+      body: "a comment",
+      author: "someone",
+      in_reply_to: null,
+      created_at: "2026-09-15T00:00:00.000Z",
+      edited_at: null,
+      resolved_at: null,
+      resolved_by: null,
+      ...overrides,
+    };
+  }
+
+  function writeComments(
+    entries: Record<string, Uint8Array>,
+    comments: Array<Record<string, unknown>>,
+  ): void {
+    entries["comments.json"] = new TextEncoder().encode(
+      JSON.stringify({ comments }),
+    );
+  }
+
+  // A bundle whose one markdown version embeds one real png asset — the fixture
+  // the tests that need actual asset bytes on disk mutate.
+  async function assetBoardBundle(): Promise<{
+    s: TestServer;
+    token: string;
+    assetId: string;
+    zip: Uint8Array<ArrayBuffer>;
+  }> {
+    const { s, token } = await setup();
+    const board = await makeBoard(s, token);
+    const assetId = await uploadAsset(
+      s,
+      token,
+      board.id,
+      pngBytes(64),
+      "image/png",
+    );
+    const publish = await s.api.post(
+      `/api/boards/${board.id}/publish`,
+      {
+        format: "markdown",
+        content: `![shot](asset:${assetId})\n`,
+        expected_version: 0,
+      },
+      { token },
+    );
+    expect(publish.status).toBe(201);
+    const zip = await exportBundle(s, token, board.id);
+    return { s, token, assetId, zip };
+  }
+
+  // Every rejection below asserts the SPECIFIC one: 422, the import_rejected
+  // code, and that the message names the offending item — a test that only
+  // asserts "something threw" passes for the wrong reason when the rejection
+  // moves. Nothing-written rides along, because that is the quarantine.
+  async function expectRejected(
+    s: TestServer,
+    before: { boards: number; events: number },
+    res: Response,
+    ...named: string[]
+  ): Promise<void> {
+    expect(res.status).toBe(422);
+    const { code, message } = await errorBody(res);
+    expect(code).toBe("import_rejected");
+    for (const name of named) {
+      expect(message).toContain(name);
+    }
+    expect(counts(s)).toEqual(before);
+  }
+
+  // The strict manifest (docs/security.md "Import quarantine") is what keeps a
+  // smuggled field from riding along into a future schema reader.
+  test("an unknown manifest top-level field is rejected 422", async () => {
+    const f = await simpleBoardBundle();
+    const before = counts(f.s);
+    const res = await importMutated(f, (entries) => {
+      patchManifest(entries, (manifest) => {
+        manifest.extra = 1;
+      });
+    });
+    await expectRejected(f.s, before, res, 'unknown field "extra"');
+  });
+
+  test("an off-enum board.format is rejected 422", async () => {
+    const f = await simpleBoardBundle();
+    const before = counts(f.s);
+    const res = await importMutated(f, (entries) => {
+      patchManifest(entries, (manifest) => {
+        (manifest.board as Record<string, unknown>).format = "pdf";
+      });
+    });
+    await expectRejected(
+      f.s,
+      before,
+      res,
+      'board.format must be "markdown" or "html"',
+    );
+  });
+
+  test("an off-enum board.status is rejected 422", async () => {
+    const f = await simpleBoardBundle();
+    const before = counts(f.s);
+    const res = await importMutated(f, (entries) => {
+      patchManifest(entries, (manifest) => {
+        (manifest.board as Record<string, unknown>).status = "archived";
+      });
+    });
+    await expectRejected(
+      f.s,
+      before,
+      res,
+      'board.status must be "open" or "ended"',
+    );
+  });
+
+  test("a bundle missing events.jsonl is rejected 422", async () => {
+    const f = await simpleBoardBundle();
+    const before = counts(f.s);
+    const res = await importMutated(f, (entries) => {
+      delete entries["events.jsonl"];
+    });
+    await expectRejected(
+      f.s,
+      before,
+      res,
+      "bundle is missing manifest.json, comments.json, or events.jsonl",
+    );
+  });
+
+  test("a bundle missing comments.json is rejected 422", async () => {
+    const f = await simpleBoardBundle();
+    const before = counts(f.s);
+    const res = await importMutated(f, (entries) => {
+      delete entries["comments.json"];
+    });
+    await expectRejected(
+      f.s,
+      before,
+      res,
+      "bundle is missing manifest.json, comments.json, or events.jsonl",
+    );
+  });
+
+  // The quarantine re-render is not decoration: a version the real pipeline
+  // refuses is a 422 naming the version, never a stored half-document.
+  // renderMarkdownDocument throws InvalidAssetEmbed on a shape-invalid
+  // `asset:` src (render.ts rewriteAssetUris) — a shape-VALID unknown id is
+  // caught later by the self-containment check instead.
+  test("a version the render pipeline refuses is rejected 422", async () => {
+    const f = await simpleBoardBundle();
+    const before = counts(f.s);
+    const res = await importMutated(f, (entries) => {
+      entries["content/1.md"] = new TextEncoder().encode(
+        "![shot](asset:nope)\n",
+      );
+    });
+    await expectRejected(
+      f.s,
+      before,
+      res,
+      "version 1 failed to render",
+      'unknown asset embed "asset:nope"',
+    );
+  });
+
+  test("version content over the document cap is rejected 422", async () => {
+    const f = await simpleBoardBundle();
+    const before = counts(f.s);
+    const oversize = DOC_CAP_BYTES + 1;
+    const res = await importMutated(f, (entries) => {
+      // generated, not a committed fixture: 8 MB of one byte deflates to
+      // nothing, so the zip stays small and the test stays fast
+      entries["content/1.md"] = new Uint8Array(oversize).fill(0x61);
+    });
+    await expectRejected(
+      f.s,
+      before,
+      res,
+      `version 1 content is ${oversize} bytes`,
+      `exceeding the ${DOC_CAP_BYTES} byte cap`,
+    );
+  });
+
+  // The per-board asset quota is checked on the manifest's DECLARED sizes,
+  // before any asset bytes are read — several modest assets summing past the
+  // cap are refused as one hostile bundle.
+  test("declared assets summing past the per-board cap are rejected 422", async () => {
+    const f = await simpleBoardBundle();
+    const before = counts(f.s);
+    // real bytes, so the declared total is the ONLY thing wrong with this
+    // bundle: 5 MB of png-headed zeros deflates to nothing
+    const half = 5 * 1024 * 1024;
+    const res = await importMutated(f, (entries) => {
+      patchManifest(entries, (manifest) => {
+        manifestAssets(manifest).push(
+          assetEntry({ size: half }),
+          assetEntry({
+            id: "bbbbbbbbbb",
+            file: "assets/bbbbbbbbbb.png",
+            size: half,
+          }),
+        );
+      });
+      entries["assets/aaaaaaaaaa.png"] = pngBytes(half);
+      entries["assets/bbbbbbbbbb.png"] = pngBytes(half);
+    });
+    await expectRejected(
+      f.s,
+      before,
+      res,
+      `bundle assets total ${half * 2} bytes`,
+      `exceeding the ${BOARD_ASSET_CAP_BYTES} byte per-board cap`,
+    );
+  });
+
+  test("an asset id that is not the 10-char shape is rejected 422", async () => {
+    const f = await simpleBoardBundle();
+    const before = counts(f.s);
+    const res = await importMutated(f, (entries) => {
+      patchManifest(entries, (manifest) => {
+        manifestAssets(manifest).push(
+          assetEntry({ id: "short", file: "assets/short.png" }),
+        );
+      });
+    });
+    await expectRejected(
+      f.s,
+      before,
+      res,
+      'asset id "short" has an unexpected shape',
+    );
+  });
+
+  // assets[].file is the ONE manifest string used as a lookup key, so its shape
+  // is pinned to "assets/<id>.<ext>" — a traversal spelling never becomes a key.
+  test("an asset file that is not assets/<id>.<ext> is rejected 422", async () => {
+    const f = await simpleBoardBundle();
+    const before = counts(f.s);
+    const res = await importMutated(f, (entries) => {
+      patchManifest(entries, (manifest) => {
+        manifestAssets(manifest).push(assetEntry({ file: "assets/../x.png" }));
+      });
+    });
+    await expectRejected(
+      f.s,
+      before,
+      res,
+      'assets[aaaaaaaaaa].file must be "assets/aaaaaaaaaa.<ext>"',
+    );
+  });
+
+  test("stored asset bytes disagreeing with the manifest size are rejected 422", async () => {
+    const f = await assetBoardBundle();
+    const before = counts(f.s);
+    const res = await importMutated(f, (entries) => {
+      patchManifest(entries, (manifest) => {
+        const asset = manifestAssets(manifest)[0];
+        asset.size = (asset.size as number) + 1;
+      });
+    });
+    await expectRejected(
+      f.s,
+      before,
+      res,
+      `asset "${f.assetId}" is 64 bytes but the manifest says 65`,
+    );
+  });
+
+  test("a comments.count that disagrees with comments.json is rejected 422", async () => {
+    const f = await simpleBoardBundle();
+    const before = counts(f.s);
+    const res = await importMutated(f, (entries) => {
+      writeComments(entries, [commentEntry()]);
+    });
+    await expectRejected(
+      f.s,
+      before,
+      res,
+      "comments.count is 0 but comments.json has 1",
+    );
+  });
+
+  test("a comment anchoring an asset the bundle lacks is rejected 422", async () => {
+    const f = await simpleBoardBundle();
+    const before = counts(f.s);
+    const res = await importMutated(f, (entries) => {
+      writeComments(entries, [
+        commentEntry({ anchor: { type: "image", asset_id: "aaaaaaaaaa" } }),
+      ]);
+      patchManifest(entries, (manifest) => {
+        (manifest.comments as Record<string, unknown>).count = 1;
+      });
+    });
+    await expectRejected(
+      f.s,
+      before,
+      res,
+      'comment "cccccccccc" anchors asset "aaaaaaaaaa" which the bundle does not contain',
+    );
+  });
+
+  test("a comments.json that is not JSON is rejected 422", async () => {
+    const f = await simpleBoardBundle();
+    const before = counts(f.s);
+    const res = await importMutated(f, (entries) => {
+      entries["comments.json"] = new TextEncoder().encode("{not json");
+    });
+    await expectRejected(f.s, before, res, "comments.json is not valid JSON");
+  });
+
+  test("a duplicate comment id is rejected 422", async () => {
+    const f = await simpleBoardBundle();
+    const before = counts(f.s);
+    const res = await importMutated(f, (entries) => {
+      writeComments(entries, [commentEntry(), commentEntry()]);
+      patchManifest(entries, (manifest) => {
+        (manifest.comments as Record<string, unknown>).count = 2;
+      });
+    });
+    await expectRejected(f.s, before, res, 'duplicate comment id "cccccccccc"');
+  });
+
+  test("a comment on a version the bundle does not have is rejected 422", async () => {
+    const f = await simpleBoardBundle();
+    const before = counts(f.s);
+    const res = await importMutated(f, (entries) => {
+      writeComments(entries, [commentEntry({ version_n: 5 })]);
+      patchManifest(entries, (manifest) => {
+        (manifest.comments as Record<string, unknown>).count = 1;
+      });
+    });
+    await expectRejected(
+      f.s,
+      before,
+      res,
+      "version_n 5 is not a version of this bundle",
+    );
+  });
+
+  test("a reply citing a parent that is not earlier is rejected 422", async () => {
+    const f = await simpleBoardBundle();
+    const before = counts(f.s);
+    const res = await importMutated(f, (entries) => {
+      writeComments(entries, [commentEntry({ in_reply_to: "dddddddddd" })]);
+      patchManifest(entries, (manifest) => {
+        (manifest.comments as Record<string, unknown>).count = 1;
+      });
+    });
+    await expectRejected(
+      f.s,
+      before,
+      res,
+      'in_reply_to "dddddddddd" is not an earlier comment',
+    );
   });
 });
 

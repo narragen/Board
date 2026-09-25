@@ -26,7 +26,8 @@ function exchangeHandler(_req: Request, ctx: RequestContext): Response {
     sessionToken = exchangeSession(ctx.db, exchangeToken);
   } catch (err) {
     if (err instanceof InvalidExchangeToken) {
-      // Invariant 8: describe the failure, never the credential.
+      // Invariant 7 (tokens stored hashed): describe the failure, never the
+      // credential.
       throw new HttpError(
         401,
         "unauthorized",
@@ -54,7 +55,8 @@ function listSessionsHandler(_req: Request, ctx: RequestContext): Response {
 function revokeSessionHandler(_req: Request, ctx: RequestContext): Response {
   requireHuman(ctx);
   if (!revokeSession(ctx.db, ctx.params.id)) {
-    // the id is the (non-secret) sha256 row id — echoing it is safe (invariant 8 concerns token material)
+    // the id is the (non-secret) sha256 row id — echoing it is safe, since
+    // invariant 7 (tokens stored hashed) concerns token material
     throw new HttpError(
       404,
       "session_not_found",

@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
-import { createHash, getRandomValues } from "node:crypto";
 import type { TokenInfo } from "./domain.ts";
+import { errText } from "./err-text.ts";
+import { hashToken, newToken } from "./secrets.ts";
 
 export class TokenError extends Error {
   constructor(message: string) {
@@ -30,20 +31,6 @@ interface TokenRow {
   created_at: string;
   last_used_at: string | null;
   revoked_at: string | null;
-}
-
-// docs/security.md "Content rules": random ≥128-bit — we use 256-bit; base64url keeps it header/config copy-paste safe.
-const TOKEN_BYTES = 32;
-
-// Invariant 8 (AGENTS.md): tokens are stored as SHA-256 only; the plaintext exists solely in createToken's return value.
-function hashToken(token: string): string {
-  return createHash("sha256").update(token).digest("hex");
-}
-
-function newToken(): string {
-  return Buffer.from(getRandomValues(new Uint8Array(TOKEN_BYTES))).toString(
-    "base64url",
-  );
 }
 
 function parseScopes(raw: string): string[] {
@@ -79,7 +66,7 @@ export function createToken(
       "INSERT INTO tokens (name, token_hash, scopes, created_at) VALUES (?, ?, ?, ?)",
     ).run(opts.name, hashToken(token), JSON.stringify(scopes), createdAt);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errText(err);
     if (
       message.includes("UNIQUE constraint failed") &&
       message.includes("tokens.name")
@@ -135,8 +122,9 @@ export interface ReMintResult {
 // (D17) — a --force re-mint revokes whatever row holds the requested name
 // (whatever state: an already-revoked row revokes idempotently) and mints a
 // fresh token under the first free suffix (`name`, `name-2`, …), keeping the
-// row's audit trail. The old plaintext is unrecoverable (stored hashed,
-// invariant 8) — that is WHY re-minting, not re-showing, is the only option.
+// row's audit trail. The old plaintext is unrecoverable — invariant 7 (tokens
+// stored hashed) — and that is WHY re-minting, not re-showing, is the only
+// option.
 export function reMintToken(
   db: Database,
   opts: { name: string; scopes?: string[] },

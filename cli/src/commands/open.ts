@@ -7,7 +7,7 @@ import type { CommandIo } from "./token.ts";
 
 export type OpenUrl = (url: string, io: CommandIo) => void;
 
-export const OPEN_USAGE = "usage: board open [board id] [--instance <id>]";
+const OPEN_USAGE = "usage: board open [board id] [--instance <id>]";
 
 interface OpenCommandInput {
   config: Config;
@@ -75,11 +75,12 @@ export function runOpenCommand({
     io.stderr(OPEN_USAGE);
     return 1;
   }
-  // The human's-tool local-db path (invariant 4's sanctioned exception, same
-  // as token): the exchange token is minted directly on the target db — with
-  // --instance that is the instance's temp db while its daemon serves the
-  // link. Opened only after argv/resolution pass so usage errors never create
-  // the data dir (the twice-bitten footgun).
+  // The human's-tool local-db path (invariant 3's sanctioned exception —
+  // writes go through the daemon — same as token): the exchange token is
+  // minted directly on the target db — with --instance that is the instance's
+  // temp db while its daemon serves the link. Opened only after
+  // argv/resolution pass so usage errors never create the data dir (the
+  // twice-bitten footgun).
   const db = openDb(target.dataDir);
   try {
     // docs/security.md: a one-time exchange token rides the URL; the SPA swaps

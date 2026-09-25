@@ -81,7 +81,7 @@ describe("createToken", () => {
     db.close();
   });
 
-  test("stores sha256(token) hex, never the plaintext (invariant 8)", () => {
+  test("stores sha256(token) hex, never the plaintext (invariant 7)", () => {
     const db = freshDb();
     const { token } = createToken(db, { name: "alice" });
     const hash = storedHash(db, "alice");

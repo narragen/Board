@@ -14,7 +14,7 @@ build/
 .env.*
 !.env.example
 
-# local agent token for dogfooding (never commit — invariant 8)
+# local agent token for dogfooding (never commit — invariant 7, tokens stored hashed)
 .board-token
 
 # logs & OS noise

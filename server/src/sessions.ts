@@ -1,12 +1,13 @@
 import type { Database } from "bun:sqlite";
-import { createHash, getRandomValues } from "node:crypto";
 import type { SessionInfo } from "./domain.ts";
+import { hashToken, newToken } from "./secrets.ts";
 
 // docs/security.md "human browser session": `board open` mints a one-time
 // exchange token for the URL; the SPA swaps it at /api/session/exchange for a
 // long-lived bearer stored in localStorage. Both kinds are random ≥128-bit
 // (we use 256-bit like agent tokens) and stored SHA-256 only — the plaintext
-// exists solely in the minting call's return value (invariant 8).
+// exists solely in the minting call's return value (invariant 7). The minting
+// and hashing themselves live in secrets.ts, shared with agent tokens.
 
 export class InvalidExchangeToken extends Error {
   constructor() {
@@ -26,7 +27,6 @@ interface SessionRow {
   board_id: string | null;
 }
 
-const TOKEN_BYTES = 32;
 const EXCHANGE_TTL_MS = 10 * 60 * 1000;
 // Live sessions expire (M7 hardening): a bearer token in localStorage never
 // ages on its own, so without a TTL a forgotten credential is valid until
@@ -34,16 +34,6 @@ const EXCHANGE_TTL_MS = 10 * 60 * 1000;
 // re-exchange flow / `board open` recovers. Enforced at auth time by
 // verifySessionToken's expires_at check.
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-
-function hashToken(token: string): string {
-  return createHash("sha256").update(token).digest("hex");
-}
-
-function newToken(): string {
-  return Buffer.from(getRandomValues(new Uint8Array(TOKEN_BYTES))).toString(
-    "base64url",
-  );
-}
 
 export function createExchangeToken(db: Database, boardId?: string): string {
   const token = newToken();
@@ -126,8 +116,8 @@ export function listSessions(db: Database): SessionInfo[] {
   }));
 }
 
-// Revoke = row delete. Sessions are state, not history — invariant 4 covers
-// the event log, which stays untouched here. This is the remediation for the
+// Revoke = row delete. Sessions are state, not history — invariant 4 (events
+// are append-only) covers the event log, which stays untouched here. This is the remediation for the
 // dogfooded session-token leak: a live credential pasted into a comment had
 // no kill switch (docs/security.md "Audit view"). Deleting the CURRENT
 // session is allowed — the UI's re-exchange flow handles the dead credential.

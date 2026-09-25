@@ -11,9 +11,10 @@
 // bun: sqlite/Bun APIs; the SDK is not resolvable from cli/ under node).
 //
 // Wire protocol: newline-delimited JSON-RPC on stdin/stdout. stdout is
-// protocol ONLY; stderr carries rare diagnostics and never tokens
-// (invariant 7). The connector never writes to disk (invariant 3). Loopback
-// discipline (invariant 1) holds in three different ways: registry-derived
+// protocol ONLY; stderr carries rare diagnostics and never tokens (invariant
+// 7, tokens stored hashed). The connector never writes to disk (invariant 3,
+// writes go through the daemon). Loopback discipline (invariant 1, loopback
+// bind) holds in three different ways: registry-derived
 // (instance) URLs are enforced structurally — only a literal
 // http://127.0.0.1:<port> is ever fetched; a board_connect {url, token} pin
 // is refused unless it is a loopback http URL; and the shared-daemon URL is
@@ -93,6 +94,9 @@ export type Backend =
   | { kind: "instance"; id: string; url: string; token: string | null }
   | { kind: "direct"; url: string; token: string | null };
 
+// The one deliberate copy of server/src/err-text.ts errText: the rest of the
+// repo imports that module, but this file runs under plain `node` and must not
+// pull anything from the Bun graph (see the header). Keep them identical.
 function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
@@ -232,17 +236,21 @@ async function isHealthy(url: string): Promise<boolean> {
 
 // D23 D4: the structural guard for a board_connect {url, token} target — only
 // loopback is ever pinned or fetched (invariant 1), fail-closed like the
-// registry guard above. For explicit configuration it accepts the loopback
-// hostname forms the CLI's own resolution accepts (cli/src/resolve.ts
-// isLoopbackUrl: 127.0.0.1, localhost, ::1); other hosts, other schemes, and
-// malformed strings are refused without a single request.
+// registry guard above. It accepts the same loopback hostnames the CLI's own
+// resolution does (cli/src/resolve.ts isLoopbackUrl: 127.0.0.1, localhost,
+// ::1) but is otherwise STRICTER — the extra userinfo/query/sub-path
+// rejections below are not in that function and must not be "unified" away:
+// this url is user input to a tool call, that one is a url the CLI wrote into
+// the registry itself. Other hosts, other schemes and malformed strings are
+// refused without a single request.
 function isLoopbackHttpUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
     const host = parsed.hostname.replace(/^\[/, "").replace(/\]$/, "");
     // Userinfo and query are refused (audit 2026-09-22): a URL like
     // http://x:secret@127.0.0.1:7800 is loopback-hosted, but its credential
-    // component would ride into error text on a failed fetch (invariant 7) —
+    // component would ride into error text on a failed fetch (invariant 7,
+    // tokens stored hashed) —
     // the token belongs in board_connect's token param, never the URL.
     return (
       parsed.protocol === "http:" &&
@@ -373,7 +381,7 @@ async function proxyToBackend(
       },
       body: JSON.stringify(message),
       signal: AbortSignal.timeout(PROXY_TIMEOUT_MS),
-      redirect: "error", // invariant 1 — see isHealthy
+      redirect: "error", // invariant 1 (loopback bind) — see isHealthy
     });
   } catch (err) {
     return JSON.stringify(
@@ -481,7 +489,7 @@ async function listBoards(
     const res = await fetch(`${url}/api/boards`, {
       headers: { authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
-      redirect: "error", // invariant 1 — see isHealthy
+      redirect: "error", // invariant 1 (loopback bind) — see isHealthy
     });
     if (res.status === 401) {
       return `the credential was rejected (HTTP 401) at ${url}`;
@@ -516,6 +524,53 @@ interface ServerReport {
   hint?: string;
 }
 
+// The three-state probe both board_servers branches run: down → up but no
+// credential → up + an authenticated boards list. Only the state machine is
+// shared; the hint texts are passed in as DATA, because each kind's remedy is
+// different and those strings are user-facing (asserted in
+// mcp-connector.test.ts) — never regenerate them from the state.
+async function probeServer(
+  identity: { kind: "shared" } | { kind: "instance"; id: string },
+  url: string,
+  token: string | null,
+  hints: { down: string; noCredential: string },
+): Promise<ServerReport> {
+  if (!(await isHealthy(url))) {
+    return {
+      ...identity,
+      url,
+      status: "down",
+      credential: token !== null,
+      hint: hints.down,
+    };
+  }
+  if (token === null) {
+    return {
+      ...identity,
+      url,
+      status: "up",
+      credential: false,
+      hint: hints.noCredential,
+    };
+  }
+  const listed = await listBoards(url, token);
+  return typeof listed === "string"
+    ? {
+        ...identity,
+        url,
+        status: "up",
+        credential: true,
+        hint: `boards not listed: ${listed}`,
+      }
+    : {
+        ...identity,
+        url,
+        status: "up",
+        credential: true,
+        boards: listed.boards,
+      };
+}
+
 // board_servers — enumerate the shared daemon + every open registry instance,
 // probe liveness, and list boards where a credential lets us. Enumerating
 // costs a few local probes; there is no backend dependency, so this works
@@ -526,89 +581,36 @@ async function boardServersResult(
 ): Promise<string> {
   const servers: ServerReport[] = [];
   if (ctx.sharedUrl === null) {
+    // The one state only the shared entry can reach: there is no url to probe
+    // at all, so it never enters probeServer.
     servers.push({
       kind: "shared",
       status: "down",
       credential: ctx.sharedToken !== null,
       hint: "the shared daemon's url could not be derived (invalid BOARD_* environment)",
     });
-  } else if (!(await isHealthy(ctx.sharedUrl))) {
-    servers.push({
-      kind: "shared",
-      url: ctx.sharedUrl,
-      status: "down",
-      credential: ctx.sharedToken !== null,
-      hint: "not running — start the shared library with: make serve",
-    });
-  } else if (ctx.sharedToken === null) {
-    servers.push({
-      kind: "shared",
-      url: ctx.sharedUrl,
-      status: "up",
-      credential: false,
-      hint: "no BOARD_MCP_TOKEN credential wired to this connector — set it to list boards here (make install wires it)",
-    });
   } else {
-    const listed = await listBoards(ctx.sharedUrl, ctx.sharedToken);
     servers.push(
-      typeof listed === "string"
-        ? {
-            kind: "shared",
-            url: ctx.sharedUrl,
-            status: "up",
-            credential: true,
-            hint: `boards not listed: ${listed}`,
-          }
-        : {
-            kind: "shared",
-            url: ctx.sharedUrl,
-            status: "up",
-            credential: true,
-            boards: listed.boards,
-          },
+      await probeServer({ kind: "shared" }, ctx.sharedUrl, ctx.sharedToken, {
+        down: "not running — start the shared library with: make serve",
+        noCredential:
+          "no BOARD_MCP_TOKEN credential wired to this connector — set it to list boards here (make install wires it)",
+      }),
     );
   }
   for (const candidate of instanceCandidates(ctx.instancesDir)) {
-    if (!(await isHealthy(candidate.url))) {
-      servers.push({
-        kind: "instance",
-        id: candidate.id,
-        url: candidate.url,
-        status: "down",
-        credential: candidate.token !== null,
-        hint: `not healthy — dead or stale; clean it up with: board down ${candidate.id}`,
-      });
-    } else if (candidate.token === null) {
-      servers.push({
-        kind: "instance",
-        id: candidate.id,
-        url: candidate.url,
-        status: "up",
-        credential: false,
-        hint: "its credential env file is missing — boards not listed",
-      });
-    } else {
-      const listed = await listBoards(candidate.url, candidate.token);
-      servers.push(
-        typeof listed === "string"
-          ? {
-              kind: "instance",
-              id: candidate.id,
-              url: candidate.url,
-              status: "up",
-              credential: true,
-              hint: `boards not listed: ${listed}`,
-            }
-          : {
-              kind: "instance",
-              id: candidate.id,
-              url: candidate.url,
-              status: "up",
-              credential: true,
-              boards: listed.boards,
-            },
-      );
-    }
+    servers.push(
+      await probeServer(
+        { kind: "instance", id: candidate.id },
+        candidate.url,
+        candidate.token,
+        {
+          down: `not healthy — dead or stale; clean it up with: board down ${candidate.id}`,
+          noCredential:
+            "its credential env file is missing — boards not listed",
+        },
+      ),
+    );
   }
   return localToolPayload(id, { servers });
 }
@@ -689,6 +691,32 @@ function targetEcho(backend: Backend): Record<string, unknown> {
   }
 }
 
+// The tail every successful connect form shares: authenticate by listing
+// boards (the token must actually work, not just exist), pin only on success —
+// a bad target pins NOTHING and the prior state survives — then echo the
+// target plus what it holds. `rejectedHint` rides the failure text as DATA:
+// each form points at a different remedy and those strings are user-facing.
+async function pinAndReport(
+  ctx: ConnectorContext,
+  id: unknown,
+  backend: Backend,
+  rejectedHint: string,
+): Promise<string> {
+  const listed = await listBoards(backend.url, backend.token);
+  if (typeof listed === "string") {
+    return localToolError(
+      id,
+      `cannot connect: ${listed} — nothing pinned${rejectedHint}`,
+    );
+  }
+  ctx.pin = backend;
+  return localToolPayload(id, {
+    connected: true,
+    target: targetEcho(backend),
+    boards: listed.boards,
+  });
+}
+
 // board_connect — validate, then pin (a bad target pins NOTHING; the prior
 // state survives). Validation is always: structural guard → health probe →
 // an authenticated boards list (the token must actually authenticate, not
@@ -739,19 +767,12 @@ async function boardConnectResult(
           `cannot connect: the shared daemon at ${ctx.sharedUrl} is not healthy — start it with: make serve`,
         );
       }
-      const listed = await listBoards(ctx.sharedUrl, ctx.sharedToken);
-      if (typeof listed === "string") {
-        return localToolError(
-          id,
-          `cannot connect: ${listed} — nothing pinned (re-mint + rewire with: make install FLAGS=--force)`,
-        );
-      }
-      ctx.pin = { kind: "shared", url: ctx.sharedUrl, token: ctx.sharedToken };
-      return localToolPayload(id, {
-        connected: true,
-        target: targetEcho(ctx.pin),
-        boards: listed.boards,
-      });
+      return pinAndReport(
+        ctx,
+        id,
+        { kind: "shared", url: ctx.sharedUrl, token: ctx.sharedToken },
+        " (re-mint + rewire with: make install FLAGS=--force)",
+      );
     }
     case "url": {
       // A trailing slash (copy-paste common) would make every probe/fetch
@@ -771,19 +792,12 @@ async function boardConnectResult(
           `cannot connect: no board server answered at ${url} — nothing pinned`,
         );
       }
-      const listed = await listBoards(url, parsed.token);
-      if (typeof listed === "string") {
-        return localToolError(
-          id,
-          `cannot connect: ${listed} — nothing pinned (ask the board's manager for the right token)`,
-        );
-      }
-      ctx.pin = { kind: "direct", url, token: parsed.token };
-      return localToolPayload(id, {
-        connected: true,
-        target: targetEcho(ctx.pin),
-        boards: listed.boards,
-      });
+      return pinAndReport(
+        ctx,
+        id,
+        { kind: "direct", url, token: parsed.token },
+        " (ask the board's manager for the right token)",
+      );
     }
     case "instance": {
       if (!plausibleInstanceId(parsed.id)) {
@@ -814,21 +828,17 @@ async function boardConnectResult(
           `cannot connect: instance "${wanted}" has no credential env file — boards unreachable, nothing pinned`,
         );
       }
-      const listed = await listBoards(candidate.url, candidate.token);
-      if (typeof listed === "string") {
-        return localToolError(id, `cannot connect: ${listed} — nothing pinned`);
-      }
-      ctx.pin = {
-        kind: "instance",
-        id: candidate.id,
-        url: candidate.url,
-        token: candidate.token,
-      };
-      return localToolPayload(id, {
-        connected: true,
-        target: targetEcho(ctx.pin),
-        boards: listed.boards,
-      });
+      return pinAndReport(
+        ctx,
+        id,
+        {
+          kind: "instance",
+          id: candidate.id,
+          url: candidate.url,
+          token: candidate.token,
+        },
+        "",
+      );
     }
   }
 }

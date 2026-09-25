@@ -11,9 +11,9 @@
 // credential exists, no secrets) and `board_connect` (pins by instance id,
 // then by {url, token} — the pinned publish lands on the pinned daemon, not
 // the auto-resolution favorite).
-// Temp data dir + scratch ports throughout (never the real ~/.board or :7800
-// — AGENTS.md invariant); asserts every step; prints SMOKE PASS/FAIL, exits
-// 0/1.
+// Temp data dir + scratch ports throughout, never the real ~/.board or :7800
+// (AGENTS.md Conventions: tests and dev runs use a temp BOARD_DATA_DIR, never
+// the real one); asserts every step; prints SMOKE PASS/FAIL, exits 0/1.
 //
 // Run: bun scripts/smoke.ts (or `make smoke`).
 
@@ -29,6 +29,7 @@ import {
   spawnInstance,
   teardownInstance,
 } from "../cli/src/instances.ts";
+import { boardIdFrom, parseUp } from "../cli/test/harness.ts";
 import { openDb } from "../server/src/db.ts";
 import type {
   Board,
@@ -37,6 +38,7 @@ import type {
   Version,
   VersionMeta,
 } from "../server/src/domain.ts";
+import { errText } from "../server/src/err-text.ts";
 import { createExchangeToken } from "../server/src/sessions.ts";
 
 // Receiver-side verification of the `X-Board-Signature` webhook header — the
@@ -187,51 +189,6 @@ const V3_MD = V2_MD.replace(
   "- [ ] run the smoke",
   "- [x] run the smoke — D23 D4 explicit connect verified",
 );
-
-// The `board up` output contract (the same lines cli/src/instances.test.ts
-// parses): id/url/token/env/human-link, plus the board id from the link.
-interface InstanceUp {
-  id: string;
-  url: string;
-  token: string;
-  envPath: string;
-  human: string;
-  boardId: string;
-}
-
-function parseInstanceUp(stdout: string): InstanceUp {
-  const head =
-    /instance (s-[0-9A-Za-z]{10}) listening on (http:\/\/127\.0\.0\.1:\d+)/.exec(
-      stdout,
-    );
-  const token =
-    /^agent token \(print once — it is not recoverable\): (\S+)$/m.exec(
-      stdout,
-    )?.[1];
-  const envPath =
-    /^credentials env file \(agent shells: source it\): (.+)$/m.exec(
-      stdout,
-    )?.[1];
-  const human = /^human link: (.+)$/m.exec(stdout)?.[1];
-  const boardId = /#\/boards\/([0-9A-Za-z]{10})/.exec(human ?? "")?.[1];
-  if (
-    head === null ||
-    token === undefined ||
-    envPath === undefined ||
-    human === undefined ||
-    boardId === undefined
-  ) {
-    throw new Error(`could not parse board up output:\n${stdout}`);
-  }
-  return {
-    id: head[1] ?? "",
-    url: head[2] ?? "",
-    token,
-    envPath,
-    human,
-    boardId,
-  };
-}
 
 function payloadId(ev: BoardEvent | null | undefined, key: string): string {
   const value = ev?.payload[key];
@@ -926,7 +883,8 @@ async function run(): Promise<0 | 1> {
           "M8 smoke — session review",
         ]);
         assert(res.code === 0, `board up failed (${res.code}):\n${res.stderr}`);
-        const up = parseInstanceUp(res.stdout);
+        const up = parseUp(res.stdout);
+        const boardId = boardIdFrom(up);
         sessionId = up.id;
         const paths = instancePaths(dataDir, up.id);
         assert(
@@ -942,7 +900,7 @@ async function run(): Promise<0 | 1> {
           envToken !== null && envToken.length > 0,
           "env file carries no BOARD_TOKEN",
         );
-        const vres = await fetch(`${up.url}/api/boards/${up.boardId}`, {
+        const vres = await fetch(`${up.url}/api/boards/${boardId}`, {
           headers: { authorization: `Bearer ${envToken ?? ""}` },
         });
         assert(
@@ -958,7 +916,8 @@ async function run(): Promise<0 | 1> {
           `unexpected v1 view: ${JSON.stringify(view.board)}`,
         );
         // the human link's exchange token swaps for a session that reads it
-        const exch = /\?token=([A-Za-z0-9_-]{43})/.exec(up.human)?.[1] ?? "";
+        const exch =
+          /\?token=([A-Za-z0-9_-]{43})/.exec(up.human ?? "")?.[1] ?? "";
         const xres = await fetch(`${up.url}/api/session/exchange`, {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -966,11 +925,11 @@ async function run(): Promise<0 | 1> {
         });
         assert(xres.status === 200, `human link exchange: HTTP ${xres.status}`);
         const sess = (await xres.json()) as { token: string };
-        const sres = await fetch(`${up.url}/api/boards/${up.boardId}`, {
+        const sres = await fetch(`${up.url}/api/boards/${boardId}`, {
           headers: { authorization: `Bearer ${sess.token}` },
         });
         assert(sres.status === 200, `session board read: HTTP ${sres.status}`);
-        return { ...up, sessionToken: sess.token };
+        return { ...up, boardId, sessionToken: sess.token };
       },
     );
 
@@ -1436,7 +1395,7 @@ async function run(): Promise<0 | 1> {
     return 0;
   } catch (err) {
     console.error(
-      `SMOKE FAIL — step ${stepNo} (${stepLabel}): ${err instanceof Error ? err.message : String(err)}`,
+      `SMOKE FAIL — step ${stepNo} (${stepLabel}): ${errText(err)}`,
     );
     if (lastResponse !== undefined) {
       console.error(
@@ -1467,7 +1426,7 @@ async function run(): Promise<0 | 1> {
         });
       } catch (err) {
         console.error(
-          `board smoke: smoke-daemon teardown failed: ${err instanceof Error ? err.message : String(err)}`,
+          `board smoke: smoke-daemon teardown failed: ${errText(err)}`,
         );
       }
     }
@@ -1483,7 +1442,7 @@ async function run(): Promise<0 | 1> {
           });
         } catch (err) {
           console.error(
-            `board smoke: session-instance teardown failed: ${err instanceof Error ? err.message : String(err)}`,
+            `board smoke: session-instance teardown failed: ${errText(err)}`,
           );
         }
       }

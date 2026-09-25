@@ -5,7 +5,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { connect } from "node:net";
 import { AssetTooLarge, readBinaryAssetBody } from "../src/assets.ts";
-import { readImportBody } from "../src/bundle.ts";
+import { readImportBody } from "../src/bundle-import.ts";
 import { readJsonBody } from "../src/http.ts";
 import {
   type RawResponse,

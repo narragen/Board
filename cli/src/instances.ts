@@ -1,7 +1,7 @@
 // Agent-managed session instances (D20): the ONE implementation of the
 // registry, daemon spawn/readiness, pid identity, and teardown mechanics —
-// shared by the `board up/down/instances` commands, the CLI tests, and (in a
-// later wave) the smoke refactor. Every instance is a throwaway loopback
+// shared by the `board up/down/instances` commands, the CLI tests, and
+// scripts/smoke.ts. Every instance is a throwaway loopback
 // daemon on an OS-temp data dir; the shared daemon and `~/.board` stay
 // human-managed (D20 safety boundary).
 import type { Database } from "bun:sqlite";
@@ -22,8 +22,9 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import { buildBundle } from "../../server/src/bundle.ts";
+import { buildBundle } from "../../server/src/bundle-export.ts";
 import { openDb } from "../../server/src/db.ts";
+import { errText } from "../../server/src/err-text.ts";
 import { shortId } from "../../server/src/ids.ts";
 import { LISTEN_LINE } from "../../server/src/main.ts";
 import { createToken } from "../../server/src/tokens.ts";
@@ -78,7 +79,7 @@ export class PidForeignError extends Error {
   }
 }
 
-export class InstanceSpawnError extends Error {
+class InstanceSpawnError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "InstanceSpawnError";
@@ -88,15 +89,11 @@ export class InstanceSpawnError extends Error {
 // F1 (audit): the registry entry fails the structural data-dir guard —
 // treated as corrupt: nothing is signalled, nothing purged; the human
 // inspects instance.json manually.
-export class CorruptEntryError extends Error {
+class CorruptEntryError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "CorruptEntryError";
   }
-}
-
-function errText(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }
 
 // The registry is the discovery substrate under the RESOLVED BOARD_DATA_DIR —
@@ -140,6 +137,9 @@ function createRegistryDir(dataDir: string): {
 // under instances/ is reported, never recursed into or deleted. Applied to
 // user-supplied ids too (down/--instance): a `../`-style id could otherwise
 // address files outside the registry. [D20; audit F1 guard 2]
+// The same regex is duplicated in mcp-connector.ts plausibleInstanceId, which
+// cannot import this module: that file runs under plain `node` and this one is
+// Bun-graph (bun:sqlite). Change both or neither.
 export function plausibleId(id: string): boolean {
   return /^s-[0-9A-Za-z]{10}$/.test(id);
 }
@@ -153,7 +153,7 @@ export function plausibleId(id: string): boolean {
 // directory. [D20; audit F1 guard 1]
 const SESSION_DATA_PREFIX = "board-instance-";
 
-export function isSessionDataDir(dir: string): boolean {
+function isSessionDataDir(dir: string): boolean {
   const resolved = resolve(dir);
   return (
     dirname(resolved) === resolve(tmpdir()) &&
@@ -208,7 +208,7 @@ export function writeInstanceEntry(
 // owner-accepted): the ONLY plaintext surfaces are this file and up's
 // print-once line. mode 0600, deleted by down/prune. instance.json and
 // daemon.log never see the token.
-export function writeEnvFile(
+function writeEnvFile(
   paths: InstancePaths,
   creds: { id: string; port: number; token: string },
 ): void {
@@ -236,11 +236,11 @@ export function readEnvToken(paths: InstancePaths): string | null {
   }
 }
 
-export function deleteEnvFile(paths: InstancePaths): void {
+function deleteEnvFile(paths: InstancePaths): void {
   rmSync(paths.env, { force: true });
 }
 
-export function serverEntryPath(): string {
+function serverEntryPath(): string {
   // cli/src/instances.ts → repo root is two levels up.
   return join(import.meta.dir, "..", "..", "server", "src", "main.ts");
 }
@@ -393,26 +393,34 @@ export async function spawnInstance(
   let proc:
     | (DaemonProcess & { kill(signal?: number | NodeJS.Signals): void })
     | undefined;
-  // F3 (audit): SIGINT/SIGTERM during the boot window must not orphan the
-  // detached daemon — it would outlive the registry with no entry to manage
-  // and a token nobody can recover. The handlers run the same cleanup as the
-  // failure catch-path below (kill child, rm temp + registry dir), then exit
-  // non-zero; they are removed the moment the boot window ends (finally) so
-  // later Ctrl-C semantics are untouched.
-  const onBootSignal = (signal: NodeJS.Signals): void => {
-    void (async () => {
-      if (proc !== undefined) {
-        try {
-          proc.kill("SIGKILL");
-        } catch {
-          // already gone
-        }
-        await proc.exited;
+  // F3 (audit): the ONE cleanup for every way a boot can end badly — the
+  // signal handlers below and the failure catch-path further down both call
+  // it. Kill the child (the Subprocess handle is authoritative: our own child,
+  // no identity question), then remove the temp data dir and the registry dir.
+  // Two copies used to sit at both sites with a comment asserting they matched;
+  // drifting would orphan a detached daemon holding an unrecoverable token with
+  // no registry entry to manage it, which is exactly what F3 exists to prevent.
+  const abortBoot = async (): Promise<void> => {
+    if (proc !== undefined) {
+      try {
+        proc.kill("SIGKILL");
+      } catch {
+        // already gone
       }
-      rmSync(dataDir, { recursive: true, force: true });
-      rmSync(paths.dir, { recursive: true, force: true });
+      await proc.exited;
+    }
+    rmSync(dataDir, { recursive: true, force: true });
+    rmSync(paths.dir, { recursive: true, force: true });
+  };
+  // SIGINT/SIGTERM during the boot window must not orphan the detached daemon
+  // — it would outlive the registry with no entry to manage and a token nobody
+  // can recover. Clean up, then exit non-zero; the handlers are removed the
+  // moment the boot window ends (finally) so later Ctrl-C semantics are
+  // untouched.
+  const onBootSignal = (signal: NodeJS.Signals): void => {
+    void abortBoot().then(() => {
       process.exit(signal === "SIGINT" ? 130 : 143);
-    })();
+    });
   };
   process.on("SIGINT", onBootSignal);
   process.on("SIGTERM", onBootSignal);
@@ -424,7 +432,7 @@ export async function spawnInstance(
     // opened, migrated, seeded, and CLOSED in this process before the daemon
     // ever opens it — no boot-time WAL race between two writers. The
     // plaintext exists only in memory and, below, the env file; at rest in
-    // the db it is SHA-256 (invariant 8). [D20]
+    // the db it is SHA-256 (invariant 7, tokens stored hashed). [D20]
     const db = openDb(dataDir);
     const { token } = createToken(db, { name: opts.agentTokenName });
     const extraTokens = (opts.extraAgentTokenNames ?? []).map(
@@ -434,9 +442,9 @@ export async function spawnInstance(
 
     // Env is scrubbed (F2 above) then PINNED over the inherited environ: a
     // hostile BOARD_HOST=0.0.0.0 or a widened BOARD_BIND from the agent's
-    // shell must never widen a session instance (invariant 1; D20 safety
-    // boundary). BOARD_PORT=0 kernel-assigns the port so instances never
-    // collide on :7800.
+    // shell must never widen a session instance (invariant 1, loopback bind;
+    // D20 safety boundary). BOARD_PORT=0 kernel-assigns the port so instances
+    // never collide on :7800.
     proc = Bun.spawn([process.execPath, serverEntryPath()], {
       env: {
         ...scrubbedChildEnv(),
@@ -489,19 +497,9 @@ export async function spawnInstance(
     writeEnvFile(paths, { id, port: entry.port, token });
     return { entry, token, extraTokens };
   } catch (err) {
-    // Boot failed: never leak a half-registered instance. The Subprocess
-    // handle is authoritative here (our own child — no identity question),
-    // then the temp dir and the registry dir go too.
-    if (proc !== undefined) {
-      try {
-        proc.kill("SIGKILL");
-      } catch {
-        // already gone
-      }
-      await proc.exited;
-    }
-    rmSync(dataDir, { recursive: true, force: true });
-    rmSync(paths.dir, { recursive: true, force: true });
+    // Boot failed: never leak a half-registered instance — the same cleanup
+    // the signal handlers run, by construction.
+    await abortBoot();
     throw err;
   } finally {
     // Boot window over: restore default signal semantics for the rest of the
@@ -689,7 +687,7 @@ async function exportBoardsViaRest(
 // are zipped from the temp data dir directly. openDb replays the WAL of the
 // dead daemon (a single dead writer — safe) and buildBundle is the export
 // route's own pure function, unchanged. [D20]
-export function exportBoardsFromDisk(
+function exportBoardsFromDisk(
   entry: InstanceEntry,
   paths: InstancePaths,
   notice: (message: string) => void,
@@ -776,10 +774,7 @@ export function discoverKeepsakes(
 // The daemon is NOT this process's child (`down` is a different process from
 // the `up` that spawned it) — waitpid/SIGCHLD cannot observe it, so /proc
 // identity polling is the only liveness mechanism. [D20]
-export async function signalDaemon(
-  pid: number,
-  dataDir: string,
-): Promise<void> {
+async function signalDaemon(pid: number, dataDir: string): Promise<void> {
   // N1 (audit): the caller verified identity, then spent seconds in REST
   // end/export before reaching this signal — a pid recycled in between would
   // eat a stray SIGTERM. Re-verify immediately before the first signal: the

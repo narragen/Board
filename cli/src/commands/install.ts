@@ -1,3 +1,10 @@
+// `board install` (D22/D26/D28): wire every local agent to the board MCP
+// connector. One run per agent does three unrelated things — copy the skills
+// (+ their templates), mint or re-use that agent's credential, and write its
+// MCP entry — into four agents across three config formats (opencode JSON,
+// `claude mcp add`, and a printed snippet for codex/pi). Nothing here is
+// idempotent by accident: each step reports what it actually did, and a
+// successful-looking wire is read back before it is believed.
 import type { Database } from "bun:sqlite";
 import {
   copyFileSync,
@@ -17,6 +24,7 @@ import {
   parseTree,
   printParseErrorCode,
 } from "jsonc-parser";
+import { errText } from "../../../server/src/err-text.ts";
 import {
   type CreatedToken,
   createToken,
@@ -25,6 +33,11 @@ import {
 } from "../../../server/src/tokens.ts";
 import type { CommandIo } from "./token.ts";
 
+// Deliberately the CONVENTIONAL shared-daemon address, not config-derived:
+// BOARD_PORT belongs to whatever daemon the shell last sourced (a D20 instance
+// env file exports it), so a config-derived probe would report the session
+// instance's health under the label "shared daemon". The warning below is only
+// about the human-managed library (D21), which lives here or nowhere.
 const BOARD_HEALTH_URL = "http://127.0.0.1:7800/api/health";
 export const INSTALL_USAGE =
   "usage: board install [--agents opencode,claude,codex,pi] [--force]";
@@ -33,9 +46,12 @@ export const INSTALL_USAGE =
 // MCP is available whenever ANY board server is up (shared daemon or a D20
 // session instance) — not only when the shared daemon runs. REPO_ROOT derives
 // from this module's own location (import.meta.url via import.meta.dir), never
-// the cwd — `make install` may run from anywhere. Bare "node" matches the
-// working playwright MCP precedent on this machine: opencode's env PATH has
-// node but not reliably bun, which is why the connector is node-runnable.
+// the cwd — `make install` may run from anywhere, and it is the ONE place that
+// hop count is written (the skills and templates paths below go through it too,
+// so moving this file breaks loudly in one spot instead of silently in three).
+// Bare "node" matches the working playwright MCP precedent on this machine:
+// opencode's env PATH has node but not reliably bun, which is why the
+// connector is node-runnable.
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 export const MCP_CONNECTOR_COMMAND = "node";
 export const MCP_CONNECTOR_PATH = join(
@@ -222,17 +238,10 @@ function agentSkillsRoot(agent: Agent): string {
 }
 
 function repoSkillPath(name: string): string {
-  return join(import.meta.dir, "..", "..", "..", "skills", name, "SKILL.md");
+  return join(REPO_ROOT, "skills", name, "SKILL.md");
 }
 
-const REPO_TEMPLATES_DIR = join(
-  import.meta.dir,
-  "..",
-  "..",
-  "..",
-  "skills",
-  "templates",
-);
+const REPO_TEMPLATES_DIR = join(REPO_ROOT, "skills", "templates");
 
 // The html templates a skill tells an agent to start from. They ship INSIDE
 // each skill's own directory, so the reference in SKILL.md resolves for an
@@ -357,7 +366,7 @@ export function reportSkillCopyFailure(
   err: unknown,
   io: CommandIo,
 ): void {
-  const message = err instanceof Error ? err.message : String(err);
+  const message = errText(err);
   if (message.includes("EROFS")) {
     io.stderr(
       `board: ${dest} is on a read-only filesystem — you are running inside a container.\n` +
@@ -482,7 +491,7 @@ function wireOpencode(token: string, io: CommandIo): boolean {
     // newest session instance while the human's browser hits the shared
     // daemon — a split-brain the env-var fix below resolves. The placeholder
     // (not the token) keeps stderr token-free: the plaintext was printed once
-    // above, on stdout (invariant 7).
+    // above, on stdout (invariant 7, tokens stored hashed).
     const isReadOnly = err instanceof Error && err.message?.includes("EROFS");
     if (isReadOnly) {
       io.stderr(
@@ -501,7 +510,7 @@ function wireOpencode(token: string, io: CommandIo): boolean {
       io.stderr(`  (${manualTokenNote("opencode")})`);
     } else {
       io.stderr(
-        `board: could not merge the board MCP entry into ${configPath} (${err instanceof Error ? err.message : String(err)}); add it manually under "mcp": { "servers": { … } }:`,
+        `board: could not merge the board MCP entry into ${configPath} (${errText(err)}); add it manually under "mcp": { "servers": { … } }:`,
       );
       io.stderr(`  "board": {`);
       io.stderr(`    "type": "local",`);
@@ -655,7 +664,7 @@ function mintToken(
   } catch (err) {
     if (err instanceof TokenNameTaken) {
       // Without --force there is nothing to wire: the plaintext token is
-      // gone (stored hashed, invariant 8), so re-minting is required. Give
+      // gone (stored hashed, invariant 7), so re-minting is required. Give
       // the exact runnable commands — `make install --force` does NOT work
       // (GNU make eats dash-flags as its own options).
       io.stdout(
@@ -712,13 +721,13 @@ export function runInstallCommand({
         runClaude,
       );
       ok = wiredOk && ok;
-      // Print-once discipline (invariant 8): the plaintext exists only at mint
-      // time, so this is the one chance to surface it. Deliberately NOT
-      // suppressed when wiring stored it — a mint only happens on a first
-      // install for an agent (a re-run without --force takes the re-wire path
-      // below and prints nothing), so the exposure is once per data dir, and
-      // printing is the fail-safe direction if the config write is not what it
-      // claims to be.
+      // Print-once discipline (invariant 7, tokens stored hashed): the
+      // plaintext exists only at mint time, so this is the one chance to
+      // surface it. Deliberately NOT suppressed when wiring stored it — a mint
+      // only happens on a first install for an agent (a re-run without --force
+      // takes the re-wire path below and prints nothing), so the exposure is
+      // once per data dir, and printing is the fail-safe direction if the
+      // config write is not what it claims to be.
       io.stdout(
         `token for "${token.name}" (store it now — it is stored hashed and cannot be shown again):`,
       );

@@ -9,16 +9,13 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { openDb } from "./db.ts";
-import type { Board, Version } from "./domain.ts";
-import { getEvents } from "./events.ts";
-import { MAX_BODY_BYTES } from "./http.ts";
 import {
   BoardEnded,
   BoardNotFound,
   ContentTooLarge,
   createBoard,
   endBoard,
+  filterBoards,
   getBoard,
   getVersion,
   listBoards,
@@ -28,7 +25,11 @@ import {
   StoreError,
   VersionConflict,
   VersionNotFound,
-} from "./store.ts";
+} from "./boards.ts";
+import { openDb } from "./db.ts";
+import type { Board, Version } from "./domain.ts";
+import { getEvents } from "./events.ts";
+import { MAX_BODY_BYTES } from "./http.ts";
 
 const MD_V1 = [
   "# V1 Title",
@@ -48,8 +49,8 @@ const HTML_DOC = [
   "</body></html>",
 ].join("");
 
-// Regression for the write-order invariant (events.ts:41 — the db row commits
-// first, the jsonl mirrors are written after). The seam: replace the global
+// Regression for the write-order invariant (mirrorEventFiles in events.ts —
+// the db row commits first, the jsonl mirrors are written after). The seam: replace the global
 // events.jsonl FILE with a DIRECTORY, so the mirror's appendFileSync throws
 // EISDIR — a crash-shaped failure of the mirror step alone. The event row and
 // the version must still be committed (mirrors may lag the db, never lead
@@ -249,8 +250,8 @@ describe("board lifecycle run", () => {
     ).rejects.toBeInstanceOf(BoardNotFound);
   });
 
-  test("restoreVersion republishes v1 as v3 with a restore label", async () => {
-    const v3 = await restoreVersion(db, dataDir, board.id, {
+  test("restoreVersion republishes v1 as v3 with a restore label", () => {
+    const v3 = restoreVersion(db, dataDir, board.id, {
       from_n: 1,
       expected_version: 2,
       actor: "human",
@@ -267,24 +268,24 @@ describe("board lifecycle run", () => {
     expect(readFileSync(join(versionsDir(), "3.md"), "utf8")).toBe(MD_V1);
   });
 
-  test("restoreVersion with an unknown from_n throws VersionNotFound", async () => {
-    expect(
+  test("restoreVersion with an unknown from_n throws VersionNotFound", () => {
+    expect(() =>
       restoreVersion(db, dataDir, board.id, {
         from_n: 99,
         expected_version: 3,
         actor: "human",
       }),
-    ).rejects.toBeInstanceOf(VersionNotFound);
+    ).toThrow(VersionNotFound);
   });
 
-  test("restoreVersion with a stale expected_version throws VersionConflict", async () => {
-    expect(
+  test("restoreVersion with a stale expected_version throws VersionConflict", () => {
+    expect(() =>
       restoreVersion(db, dataDir, board.id, {
         from_n: 1,
         expected_version: 2,
         actor: "human",
       }),
-    ).rejects.toBeInstanceOf(VersionConflict);
+    ).toThrow(VersionConflict);
   });
 
   test("endBoard marks the board ended and refreshes board.json", () => {
@@ -308,14 +309,14 @@ describe("board lifecycle run", () => {
     ).rejects.toBeInstanceOf(BoardEnded);
   });
 
-  test("restoreVersion on an ended board throws BoardEnded even with a stale expected_version", async () => {
-    expect(
+  test("restoreVersion on an ended board throws BoardEnded even with a stale expected_version", () => {
+    expect(() =>
       restoreVersion(db, dataDir, board.id, {
         from_n: 1,
         expected_version: 0,
         actor: "human",
       }),
-    ).rejects.toBeInstanceOf(BoardEnded);
+    ).toThrow(BoardEnded);
   });
 
   test("endBoard on an already-ended board throws BoardEnded without a second event", () => {
@@ -508,13 +509,74 @@ describe("board and version queries", () => {
     );
   });
 
-  test("restoreVersion on an unknown board throws BoardNotFound", async () => {
-    expect(
+  test("restoreVersion on an unknown board throws BoardNotFound", () => {
+    expect(() =>
       restoreVersion(db, dataDir, "missing", {
         from_n: 1,
         expected_version: 0,
         actor: "human",
       }),
-    ).rejects.toBeInstanceOf(BoardNotFound);
+    ).toThrow(BoardNotFound);
+  });
+});
+
+function filterFixture(over: Partial<Board>): Board {
+  return {
+    id: "x",
+    title: "t",
+    format: "markdown",
+    status: "open",
+    tags: [],
+    created_by: "agent",
+    created_at: "2026-01-01T00:00:00.000Z",
+    current_version: 0,
+    ...over,
+  };
+}
+
+describe("filterBoards", () => {
+  test("no filters returns every board", () => {
+    const boards = [filterFixture({ id: "a" }), filterFixture({ id: "b" })];
+    expect(filterBoards(boards, {})).toEqual(boards);
+  });
+
+  test("status filter matches only that status", () => {
+    const open = filterFixture({ id: "a", status: "open" });
+    const ended = filterFixture({ id: "b", status: "ended" });
+    expect(filterBoards([open, ended], { status: "open" })).toEqual([open]);
+    expect(filterBoards([open, ended], { status: "ended" })).toEqual([ended]);
+  });
+
+  test("tag filter matches a tag at any position", () => {
+    const tagged = filterFixture({ id: "a", tags: ["alpha", "shared"] });
+    const other = filterFixture({ id: "b", tags: ["beta"] });
+    expect(filterBoards([tagged, other], { tag: "shared" })).toEqual([tagged]);
+    expect(filterBoards([tagged, other], { tag: "nope" })).toEqual([]);
+  });
+
+  test("author filter matches created_by", () => {
+    const mine = filterFixture({ id: "a", created_by: "agent-one" });
+    const theirs = filterFixture({ id: "b", created_by: "agent-two" });
+    expect(filterBoards([mine, theirs], { author: "agent-one" })).toEqual([
+      mine,
+    ]);
+  });
+
+  test("filters combine with AND semantics", () => {
+    const a = filterFixture({
+      id: "a",
+      status: "open",
+      tags: ["x"],
+      created_by: "one",
+    });
+    const b = filterFixture({
+      id: "b",
+      status: "ended",
+      tags: ["x"],
+      created_by: "one",
+    });
+    expect(
+      filterBoards([a, b], { status: "open", tag: "x", author: "one" }),
+    ).toEqual([a]);
   });
 });

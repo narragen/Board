@@ -1,6 +1,6 @@
 # API reference
 
-The complete inventory of the daemon's API surface: every REST route, the MCP tool set, and every error code — verified against `server/src/routes/`, `server/src/daemon.ts`, and `server/src/mcp.ts`. [plan.md](plan.md) keeps the scope summary; this file is the contract. Per the binding convention: **when the API surface changes, this file changes in the same commit.**
+The complete inventory of the daemon's API surface: every REST route, the MCP tool set, and every error code — verified against `server/src/routes/`, `server/src/errors.ts`, and `server/src/mcp.ts`. [plan.md](plan.md) keeps the scope summary; this file is the contract. Per the binding convention: **when the API surface changes, this file changes in the same commit.**
 
 ## Principals and auth
 
@@ -23,10 +23,12 @@ Error shape: `{ "error": { "code": "<code>", "message": "<human-readable>" } }` 
 |---|---|---|---|---|
 | `GET /api/boards` | any | filters: `status` (`open`\|`ended`), `tag`, `author` | `BoardWithCommentCounts[]` — each board + `unresolved_comments` + `subscriber_count` | 400 `invalid_request` |
 | `POST /api/boards` | any | `{title, format, tags?}` (`format`: `markdown`\|`html`) | `201` `Board` (starts at v0, empty) | 400 `invalid_request` |
-| `GET /api/boards/:id` | any | — | `{board, versions: VersionMeta[]}` (metadata only — no content) | 404 `board_not_found` |
+| `GET /api/boards/:id` | any | — | `{board: Board, versions: VersionMeta[], unresolved_comments: number}` (metadata only — no content) | 404 `board_not_found` |
 | `POST /api/boards/:id/publish` | any | `{format, content, expected_version, label?, note?}` | `201` full `Version` (content + `source_md` when markdown) | 400 `invalid_request` / `invalid_asset_embed`, 404 `board_not_found`, 409 `version_conflict` (+`current_version`) / `board_ended`, 413 `payload_too_large` (8 MB doc cap) |
 | `POST /api/boards/:id/end` | any | — | `200` `Board` (status `ended`); writes then 409, reads stay | 404 `board_not_found`, 409 `board_ended` (already ended) |
 | `POST /api/boards/:id/restore` | any | `{from_n, expected_version}` | `201` full `Version` (copy of `from_n`, labeled `restore of vN`) | 404 `board_not_found` / `version_not_found`, 409 `version_conflict` / `board_ended` |
+
+On `GET /api/boards/:id` the count rides the **response envelope**, not the board: `board` stays the plain `Board` domain type — byte-identical to what the `board_get` MCP tool returns — and `unresolved_comments` sits beside it. It is an integer count of unresolved comment thread **roots** (`countUnresolvedRoots`), the same semantics the list route's field carries, so a client never re-derives the count. The list route decorates its rows instead (`BoardWithCommentCounts`) because a list has no envelope to hang a per-board count on.
 
 Publish and restore take `expected_version` (the board's `current_version`); a stale value is **409 `version_conflict`** with `current_version` attached — read it and retry, never blind-overwrite (open-artifacts' model).
 
@@ -182,9 +184,9 @@ The liveness probe `make install` and the Dockerfile `HEALTHCHECK` use.
 
 ## MCP (`POST /mcp`, agent-only)
 
-Streamable HTTP in **stateless JSON mode** (D16): one request = one JSON response; a fresh server + transport per POST — no sessions, no GET SSE stream (**non-POST → 405** `method_not_allowed`, `Allow: POST`). Auth: agent token via `Authorization: Bearer` or `?token=` — a **valid human session token is rejected** (401, D16). Same hardening as `/api` (Host allowlist, cross-site, JSON-only, 8 MB cap). Tools call the same service layer as REST — the event log cannot tell an MCP agent from a REST agent.
+Streamable HTTP in **stateless JSON mode** (D16): one request = one JSON response; a fresh server + transport per POST — no sessions, no GET SSE stream (**non-POST → 405** `method_not_allowed`, `Allow: POST`). Auth: agent token via `Authorization: Bearer` or `?token=` — a **valid human session token is rejected** (401, D16). Same hardening as `/api` (Host allowlist, cross-site, JSON-only, 8 MB cap). Every tool calls the same service layer as REST — the event log cannot tell an MCP agent from a REST agent. Parity holds in that direction but is not symmetric: **`board_status` is MCP-only**, a daemon-liveness roll-up with no REST counterpart (D14), and `board_servers`/`board_connect` never reach the daemon at all.
 
-> The endpoint is unchanged by D22; only the shipped *wiring* changed. Agent harnesses no longer point at this URL directly — they spawn the local stdio connector (`board mcp`, or `node cli/src/mcp-connector.ts`), which lists the 15 tools from the shared manifest (its two connector-local ones included) and proxies the rest to this endpoint on whichever board server is up. Per-call resolution (D22, amended by D23 D4): a set `BOARD_INSTANCE` env targets that instance strictly (dead/missing = honest error, no fallthrough), else an explicit `board_connect` pin, else the shared daemon when healthy with `BOARD_MCP_TOKEN`, else the newest healthy session instance, else an honest error. Everything below describes this endpoint as-is.
+> The endpoint is unchanged by D22; only the shipped *wiring* changed. Agent harnesses no longer point at this URL directly — they spawn the local stdio connector (`board mcp`, or `node cli/src/mcp-connector.ts`), which lists the 15 tools from the shared manifest (its two connector-local ones included) and proxies the rest to this endpoint on whichever board server is up. Which backend a call lands on is five branches re-evaluated per request, stated once in [architecture.md](architecture.md#connector-backend-resolution) "Connector backend resolution" (D22, amended by D23 D4). Everything below describes this endpoint as-is.
 
 Tool results are `{content: [{type: "text", text: <JSON>}]}`; store errors come back as `isError: true` with a plain-text message (never JSON-RPC protocol errors); `board_publish` conflict messages append `(current_version: N)` so a retry needs no second round-trip.
 
@@ -203,7 +205,7 @@ The daemon's 13 tools:
 | `board_resolve` | `comment_id` | the `Comment` (idempotent) |
 | `board_restore` | `board_id`, `from_n`, `expected_version` | full `Version` (content included — restore copies it verbatim) |
 | `board_end` | `board_id` | the ended `Board` |
-| `board_status` | `board_id?` | `{status: "ok", boards: {open, ended}, subscribers, board?: {id, status, current_version, unresolved_comments}}` — daemon liveness (D14: the daemon-down detector) |
+| `board_status` | `board_id?` | `{status: "ok", boards: {open, ended}, subscribers, board?: {id, status, current_version, unresolved_comments}}` — daemon liveness (D14: the daemon-down detector). **MCP-only**: no REST route mirrors it |
 | `board_subscribe` | `board_id`, `webhook_url`, `webhook_secret?` | `{id, board_id, principal, webhook_url, created_seq}` |
 | `board_upload_image` | `board_id`, `path` (absolute, on the daemon host) | `{asset_id, board_id, mime, size, embed_markdown: "![image](asset:<id>)", embed_html: "<img src=/assets/<id>>"}` |
 | `board_export` | `board_id` | `{board_id, bytes, encoding: "base64", data}` — the zip base64-encoded; bundles over 8 MB are refused with a pointer to `GET /api/boards/:id/export` |
@@ -217,7 +219,7 @@ The daemon's 13 tools:
 
 ## Error codes
 
-Every code the daemon can emit (translation lives in one place — `server/src/daemon.ts` `errorResponse` — plus the shared middleware):
+Every code the daemon can emit (translation lives in one place — `errorResponse` — plus the shared middleware):
 
 | Code | Status | Raised by |
 |---|---|---|

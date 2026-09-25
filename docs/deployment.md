@@ -1,6 +1,6 @@
 # Deployment
 
-Installing, running, and supervising the daemon — on the host, under systemd, and in Docker — plus the agent-managed session instances (D20) and the single-container agent box (D23). The daemon is a **local-first, loopback-only** service for one human and their agents; nothing in this document changes that (invariant 1, [security.md](security.md)). Since D21 the shared daemon is the **optional persistent library**: setup is one command and never requires it, session instances are the default agent loop, and "running" the daemon here means starting it on demand — or permanently, if you want the library always available. Operations live in the Makefile (D10); this doc is the reference behind `make --help`.
+Installing, running, and supervising the daemon — on the host, under systemd, and in Docker — plus the agent-managed session instances (D20) and the single-container agent box (D23). The daemon is a **local-first, loopback-only** service for one human and their agents; nothing in this document changes that (invariant 1, loopback bind — [security.md](security.md)). Since D21 the shared daemon is the **optional persistent library**: setup is one command and never requires it, session instances are the default agent loop, and "running" the daemon here means starting it on demand — or permanently, if you want the library always available. Operations live in the Makefile (D10); this doc is the reference behind `make --help`.
 
 ## Install
 
@@ -23,7 +23,7 @@ make install     # wire the board MCP server into local agents + mint their toke
 `make install` (→ `bun run cli/src/main.ts install`, flags via `make install FLAGS="--agents … --force"`):
 
 - Probes `GET /api/health` first (a down daemon is a warning, not a failure — and since D22 wiring works regardless: the local connector lists the board tools offline, and its tool calls explain how to start a server when one is needed).
-- Mints one agent token per target agent, named `board-<agent>`. The plaintext is **printed once** — it is stored SHA-256 and cannot be shown again (invariant 7/8). Lost it? Re-mint.
+- Mints one agent token per target agent, named `board-<agent>`. The plaintext is **printed once** — it is stored SHA-256 and cannot be shown again (invariant 7, tokens stored hashed). Lost it? Re-mint.
 - Wires **opencode**: comment-preserving merge of a `mcp.servers.board` entry into the existing `~/.config/opencode/opencode.{jsonc,json}`, plus the skills copied to `~/.config/opencode/skills/` (`board/` and `interview/` — D25). Since D22 the entry is a **local stdio command** — opencode spawns the connector, which resolves a real board server per request — not a remote URL. The shape is opencode v2's native one (D24):
 
   ```jsonc
@@ -46,8 +46,8 @@ make install     # wire the board MCP server into local agents + mint their toke
   The target file is the one that already exists (`.jsonc` preferred when both do) — v2's own `opencode mcp add` writes `opencode.json`, and board no longer creates a second config file beside it.
 
   The repo root in the command is absolute, derived from the installer's own module location — not your shell's cwd — and bare `node` is deliberate: agent harness PATHs have node, not reliably bun.
-- Wires **claude code**: stdio form via the CLI — `claude mcp add --scope user board --env BOARD_MCP_TOKEN=<token> -- node <repo>/cli/src/mcp-connector.ts` — plus the skill at `~/.claude/skills/board/`.
-- **codex / pi**: prints a command-form TOML snippet to paste (no automated wiring) and copies the skill to `~/.agents/skills/board/`:
+- Wires **claude code**: stdio form via the CLI — `claude mcp add --scope user board --env BOARD_MCP_TOKEN=<token> -- node <repo>/cli/src/mcp-connector.ts` — plus both skills at `~/.claude/skills/` (`board/` and `interview/`).
+- **codex / pi**: prints a command-form TOML snippet to paste (no automated wiring) and copies both skills to `~/.agents/skills/` (`board/` and `interview/`):
 
   ```toml
   [mcp_servers.board]
@@ -56,7 +56,7 @@ make install     # wire the board MCP server into local agents + mint their toke
   env = { "BOARD_MCP_TOKEN" = "<board-<agent>-token>" }
   ```
 
-- **The connector (D22)** — what all four wirings point at: a stdio MCP server (`board mcp` / `node cli/src/mcp-connector.ts`) that answers `initialize`/`ping` locally, lists the 15 tools from the shared manifest (13 proxied + the two D23-D4 connector-local discovery/connect tools), and resolves a real backend per request — a set `BOARD_INSTANCE` env (strict), else a `board_connect` pin (D23 D4 explicit targeting), else the shared daemon when healthy with `BOARD_MCP_TOKEN` set, else the newest healthy session instance from the D20 registry (loopback-only, credential from the instance env file), else an honest error explaining how to start one. It never auto-spawns a daemon, so the wired `board_*` tools work against **any** running board server — session instances included.
+- **The connector (D22)** — what all four wirings point at: a stdio MCP server (`board mcp` / `node cli/src/mcp-connector.ts`) that answers `initialize`/`ping` locally, lists the 15 tools from the shared manifest (13 proxied + the two D23-D4 connector-local discovery/connect tools), and resolves a real backend per request — the five-branch precedence in [architecture.md](architecture.md#connector-backend-resolution) "Connector backend resolution" (D22, amended by D23 D4), never cached. It never auto-spawns a daemon, so the wired `board_*` tools work against **any** running board server — session instances included.
 - `--force` re-mints a taken token name — names are permanent (D17): the old token is revoked and the fresh one lands under the first free suffix (`board-<agent>`, `board-<agent>-2`, …).
 
 Tokens by hand (any agent, or scripts): `make token add [name]` (`board token add [name] [--force]` — omit the name for a generated color-animal handle like `red-armadillo`, the handle agents are mentioned by, D23), `board token list`, `board token revoke <name>`. Minting is **CLI-only by design** — no API route ever creates or echoes a token.
@@ -80,7 +80,7 @@ The shared daemon on `127.0.0.1:7800` is the optional persistent library (D21): 
 |---|---|---|
 | `BOARD_DATA_DIR` | `~/.board` | data directory (`~` expanded; relative paths resolve against cwd) |
 | `BOARD_PORT` | `7800` | listen port (0–65535) |
-| `BOARD_HOST` | `127.0.0.1` | **the** bind address. Loopback is invariant 1; changing it is the explicit, documented opt-out (see Docker below) |
+| `BOARD_HOST` | `127.0.0.1` | **the** bind address. Loopback is invariant 1 (loopback bind); changing it is the explicit, documented opt-out (see Docker below) |
 | `BOARD_BIND` | `127.0.0.1` | comma list of **additional Host-header names to accept** — it does NOT add bind addresses. Use it so clients whose `Host` header is not loopback (e.g. `host.docker.internal`) pass the DNS-rebinding allowlist |
 | `BOARD_SSE_HEARTBEAT_MS` | `25000` | SSE heartbeat interval (a test knob; leave alone in production) |
 
@@ -100,7 +100,7 @@ These are the **daemon's** variables. Two CLI-level variables are deliberately a
     events.jsonl              per-board event channel
 ```
 
-SQLite is the queryable source of truth; the bundle mirrors exist so a board is one portable, greppable unit. Agents never write here — **all writes flow through the daemon's API** (invariant 3); the CLI's token/session commands are the human's sanctioned local exception.
+SQLite is the queryable source of truth; the bundle mirrors exist so a board is one portable, greppable unit. Agents never write here — **all writes flow through the daemon's API** (invariant 3, writes go through the daemon); the CLI's token/session commands are the human's sanctioned local exception.
 
 **Backup story.** Two layers, use both:
 
@@ -121,7 +121,7 @@ Make wrappers (D10 pattern): `make up [FILE=<md>] [TITLE="…"] [FLAGS="…"]` (
 
 ### What `up` prints and writes
 
-- **Data dir:** always an OS-temp directory (`board-instance-*` under the system tmp), never under `~/.board`. **Port:** kernel-assigned (`BOARD_PORT=0`), so instances never collide with `:7800` or each other. **Bind + Host allowlist:** pinned to loopback over whatever `BOARD_HOST`/`BOARD_BIND` the invoking shell inherited (D20 boundary; invariant 1). **Child env:** scrubbed — every inherited `BOARD_*` key is stripped before the pins are applied, so a sourced previous-session env file cannot leak its live `BOARD_TOKEN` into the daemon's process environment.
+- **Data dir:** always an OS-temp directory (`board-instance-*` under the system tmp), never under `~/.board`. **Port:** kernel-assigned (`BOARD_PORT=0`), so instances never collide with `:7800` or each other. **Bind + Host allowlist:** pinned to loopback over whatever `BOARD_HOST`/`BOARD_BIND` the invoking shell inherited (D20 boundary; invariant 1, loopback bind). **Child env:** scrubbed — every inherited `BOARD_*` key is stripped before the pins are applied, so a sourced previous-session env file cannot leak its live `BOARD_TOKEN` into the daemon's process environment.
 - One agent token is minted **before** the daemon spawns (named by `--agent`, default `session`) and printed once — `instance.json` and `daemon.log` never see token material.
 - A registry entry at `<BOARD_DATA_DIR>/instances/<id>/`:
 
@@ -239,7 +239,7 @@ docker build -t board .
 Invariant 1 binds `127.0.0.1` only. In a container, `127.0.0.1` is the **container's** loopback, so two supported run forms exist and nothing else:
 
 - **Published port** — `docker run -e BOARD_HOST=0.0.0.0 -p 127.0.0.1:7800:7800 board`. Inside the container the daemon binds all interfaces (`BOARD_HOST=0.0.0.0` — necessary, or the docker proxy cannot reach it), but the **publish form is what holds the security line**: `-p 127.0.0.1:7800:7800` maps host loopback to container loopback-facing port, so only the host's own users reach the daemon. The Host-header allowlist and every other hardening layer still apply to each request.
-- **`--network host`** — `docker run --network host board` (Linux). No network namespace: the container's `127.0.0.1` **is** the host's loopback, the default `BOARD_HOST=127.0.0.1` is correct as-is, and invariant 1 holds literally.
+- **`--network host`** — `docker run --network host board` (Linux). No network namespace: the container's `127.0.0.1` **is** the host's loopback, the default `BOARD_HOST=127.0.0.1` is correct as-is, and invariant 1 (loopback bind) holds literally.
 
 **Never `-p 7800:7800`.** It publishes on every host interface and exposes the daemon to the network — the one misconfiguration this doc exists to prevent. The daemon is never to be exposed beyond the host; there is no remote mode (ngrok etc. are unshipped and would be re-examined before shipping, [security.md](security.md)).
 
@@ -273,7 +273,7 @@ The image's `HEALTHCHECK` polls `GET /api/health` (the daemon's one unauthentica
 
 ## Single-container agent box (human outside the container)
 
-The executed D23 shape: the agent lives alone in its own container and the human browses from the host. Per D23 D1=A, the agent manages a board server *inside its own box* — D21's human-management rule governs a daemon on the user's host machine, not the agent's container. This is the documented published-port form ([above](#the-loopback-tension--read-before-you-run)) applied to the agent box itself; the reasoning is identical and the security line does not move (invariant 1 — loopback-only on the host):
+The executed D23 shape: the agent lives alone in its own container and the human browses from the host. Per D23 D1=A, the agent manages a board server *inside its own box* — D21's human-management rule governs a daemon on the user's host machine, not the agent's container. This is the documented published-port form ([above](#the-loopback-tension--read-before-you-run)) applied to the agent box itself; the reasoning is identical and the security line does not move (invariant 1, loopback bind — loopback-only on the host):
 
 - **State on a persistent mount** — container env `BOARD_DATA_DIR=/home/node/board`, so daemon state survives box re-creation (the D23 D3 convention, ratified). Via the agentbox wrapper the mount rides the same passthrough as the published port: `agentbox run --docker-arg "--volume=board-data:/home/node/board"` — single token, no inner spaces, for the reason measured on `--publish` below. **The daemon now checks this at startup** and prints a warning to stderr when its data dir is on the container's own writable layer rather than a mount: a box that skipped the mount used to run perfectly and lose every board when it was re-created. The check is container-only (it never fires on a host), skips data dirs under the system temp dir, and distinguishes a mount from the root filesystem by comparing devices — see `ephemeralDataDirWarning` in `server/src/config.ts`.
 - **Bind widened at serve time only** — the daemon starts with `BOARD_HOST=0.0.0.0` (the docker proxy cannot reach a loopback-bound listener), while every *client* — CLI, MCP connector, curl — stays pinned to `127.0.0.1`. Why the split is not optional: a box-wide `BOARD_HOST=0.0.0.0` makes clients send `Host: 0.0.0.0:7800`, and the Host-header allowlist (the DNS-rebinding defense) rejects that with 421.

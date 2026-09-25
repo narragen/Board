@@ -4,10 +4,11 @@
 // and final failures append a `webhook.failed` dead-letter event.
 import type { Database } from "bun:sqlite";
 import { createHmac } from "node:crypto";
+import { requireBoard, StoreError } from "./boards.ts";
 import type { BoardEvent, Subscriber } from "./domain.ts";
+import { errText } from "./err-text.ts";
 import { appendEventDb, mirrorEventFiles } from "./events.ts";
 import { shortId } from "./ids.ts";
-import { BoardNotFound, getBoard, StoreError } from "./store.ts";
 
 export class InvalidWebhookUrl extends StoreError {
   constructor(message: string) {
@@ -68,9 +69,7 @@ export function subscribeWebhook(
   boardId: string,
   input: SubscribeInput,
 ): WebhookSubscription {
-  if (getBoard(db, boardId) === null) {
-    throw new BoardNotFound(boardId);
-  }
+  requireBoard(db, boardId);
   validateWebhookUrl(input.webhook_url);
   const id = shortId();
   const write = db.transaction(() => {
@@ -120,9 +119,7 @@ export function unsubscribeWebhook(
   boardId: string,
   actor: string,
 ): void {
-  if (getBoard(db, boardId) === null) {
-    throw new BoardNotFound(boardId);
-  }
+  requireBoard(db, boardId);
   const res = db
     .prepare(
       "DELETE FROM subscribers WHERE board_id = ? AND agent = ? AND kind = 'webhook'",
@@ -257,7 +254,7 @@ export function startWebhookDispatcher(
         }
         lastError = `HTTP ${res.status}`;
       } catch (err) {
-        lastError = err instanceof Error ? err.message : String(err);
+        lastError = errText(err);
       }
     }
     // Dead-letter (docs/plan.md): an audit marker in the global + board event

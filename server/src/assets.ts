@@ -1,7 +1,8 @@
 // Assets (M6, docs/plan.md "Image annotation"): file-copy or binary ingest of
 // images into a board bundle, plus the index lookup that cross-board serving
 // resolves. The verification pipeline here is what keeps the {path} route
-// from becoming a file-read primitive (invariant 6, docs/security.md "Assets"):
+// from becoming a file-read primitive — invariant 6 (verified asset ingest),
+// docs/security.md "Assets":
 // mime allowlist + magic bytes + size caps before a single byte is stored, and
 // rejections never echo file contents.
 import type { Database } from "bun:sqlite";
@@ -13,12 +14,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { isAbsolute, join } from "node:path";
+import { requireOpenBoard, StoreError } from "./boards.ts";
 import type { Asset, AssetSource } from "./domain.ts";
+import { errText } from "./err-text.ts";
 import { appendEventDb, mirrorEventFiles } from "./events.ts";
 import { readCappedBody } from "./http.ts";
 import { newId } from "./ids.ts";
 import { sanitizeSvgDocument } from "./render.ts";
-import { requireOpenBoard, StoreError } from "./store.ts";
 
 // Caps (docs/plan.md REST API): 10 MB per asset, 8 MB total per board. The
 // plan's own numbers make the per-board total the effective binding cap — a
@@ -124,7 +126,8 @@ function asciiBytes(text: string): number[] {
   return [...text].map((ch) => ch.charCodeAt(0));
 }
 
-// Magic bytes (invariant 6): png, jpeg, gif (both variants), and webp — the
+// Magic bytes — invariant 6 (verified asset ingest): png, jpeg, gif (both
+// variants), and webp — the
 // RIFF container plus the WEBP subtag as ONE signature, since a bare RIFF
 // match would also accept WAV/AVI files. SVG has no magic bytes: an .svg
 // name + image/svg+xml declaration + parse-and-sanitize is its verification.
@@ -336,7 +339,7 @@ export function ingestAssetFromPath(
   try {
     stat = statSync(input.path);
   } catch (err) {
-    throw new AssetUnreadable(err instanceof Error ? err.message : String(err));
+    throw new AssetUnreadable(errText(err));
   }
   if (!stat.isFile()) {
     throw new AssetUnreadable("not a regular file");
@@ -351,7 +354,7 @@ export function ingestAssetFromPath(
   try {
     bytes = new Uint8Array(readFileSync(input.path));
   } catch (err) {
-    throw new AssetUnreadable(err instanceof Error ? err.message : String(err));
+    throw new AssetUnreadable(errText(err));
   }
   if (bytes.byteLength > MAX_ASSET_BYTES) {
     throw new AssetTooLarge(bytes.byteLength);
@@ -371,7 +374,7 @@ export function getAsset(db: Database, id: string): Asset | null {
   return row === null ? null : mapAssetRow(row);
 }
 
-// Export (bundle.ts) reads every asset of a board — index order is the
+// Export (bundle-export.ts) reads every asset of a board — index order is the
 // bundle's asset order, so keep it stable.
 export function listAssets(db: Database, boardId: string): Asset[] {
   const rows = db

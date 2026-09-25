@@ -5,6 +5,7 @@ import type {
   Comment,
   ImageAnchor,
 } from "../../../server/src/domain.ts";
+import { errText } from "../../../server/src/err-text.ts";
 import { threadRootOf } from "../../../server/src/feedback.ts";
 import { anchorDescriptor, BOARD_ANCHOR } from "../anchor.ts";
 import {
@@ -73,7 +74,7 @@ export function CommentSidebar(props: CommentSidebarProps) {
       props.onCommentsChange(page.comments);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "failed to load comments");
+      setError(errText(err, "failed to load comments"));
     }
   };
 
@@ -148,7 +149,7 @@ export function CommentSidebar(props: CommentSidebarProps) {
       clearBody();
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "comment failed");
+      setError(errText(err, "comment failed"));
     } finally {
       setBusy(false);
     }
@@ -159,7 +160,7 @@ export function CommentSidebar(props: CommentSidebarProps) {
       await resolveComment(commentId);
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "resolve failed");
+      setError(errText(err, "resolve failed"));
     }
   };
 
@@ -177,7 +178,7 @@ export function CommentSidebar(props: CommentSidebarProps) {
         setEditor({ assetId: asset.id });
       })
       .catch((err) => {
-        setError(err instanceof Error ? err.message : "upload failed");
+        setError(errText(err, "upload failed"));
       })
       .finally(() => {
         setUploading(false);

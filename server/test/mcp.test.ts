@@ -338,6 +338,25 @@ describe("mcp endpoint", () => {
     }
   });
 
+  // board_status is MCP-only (no REST counterpart), so nothing covers its
+  // unknown-board path by proxy: boardStatusSummary's requireBoard is reached
+  // only through this tool.
+  test("board_status errors on an unknown board", async () => {
+    const s = server();
+    const agent = await s.createAgent("status-missing-agent");
+    const client = await connectClient(s, { headerToken: agent.token });
+    try {
+      const missing = await callTool(client, "board_status", {
+        board_id: "zzzzzzzzzz",
+      });
+      expect(missing.isError).toBe(true);
+      expect(toolText(missing)).toContain("zzzzzzzzzz");
+      expect(toolText(missing)).toContain("not found");
+    } finally {
+      await client.close();
+    }
+  });
+
   test("board_get errors on an unknown board", async () => {
     const s = server();
     const agent = await s.createAgent("missing-agent");

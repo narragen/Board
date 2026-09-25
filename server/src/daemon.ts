@@ -1,22 +1,19 @@
+// The daemon: process lifecycle plus the three-way host router every surface is
+// mounted on (docs/architecture.md "Process model"). What is where:
+// `/api/*` → the `routes` table below, `/mcp` → the stateless MCP transport,
+// `/assets/<id>` → board asset bytes, `/libs/*` → the vendored pinned libs,
+// everything else → the built SPA (static.ts serves the last two).
+//
+// Must-not: this file decides no status codes of its own. Error → HTTP
+// translation lives in errors.ts and nowhere else (docs/style-guide.md);
+// handlers and services throw domain errors.
 import type { Database } from "bun:sqlite";
-import { existsSync, statSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
-import {
-  AssetNotAnImage,
-  AssetTooLarge,
-  AssetTypeNotAllowed,
-  AssetUnreadable,
-  BoardAssetQuotaExceeded,
-} from "./assets.ts";
 import { requireAuth } from "./auth.ts";
-import { ImportRejected } from "./bundle.ts";
-import {
-  CommentBodyRequired,
-  CommentNotFound,
-  InvalidAnchor,
-} from "./comments.ts";
 import type { Config } from "./config.ts";
 import { openDb } from "./db.ts";
+import { errorResponse } from "./errors.ts";
 import { onEvent } from "./events.ts";
 import {
   assertAllowedHost,
@@ -28,7 +25,6 @@ import {
   requireJsonContentType,
 } from "./http.ts";
 import { handleMcpNonPost, handleMcpPost, requireMcpActor } from "./mcp.ts";
-import { InvalidAssetEmbed } from "./render.ts";
 import { assetRoutes, isBoardAssetPath, serveAsset } from "./routes/assets.ts";
 import { boardRoutes } from "./routes/boards.ts";
 import { commentRoutes } from "./routes/comments.ts";
@@ -41,23 +37,12 @@ import {
   type Route,
   routeRequiresAuth,
 } from "./routes/route.ts";
-import { sessionRoutes } from "./routes/session.ts";
+import { sessionRoutes } from "./routes/sessions.ts";
 import { streamRoute } from "./routes/stream.ts";
 import { tokenRoutes } from "./routes/tokens.ts";
 import { webhookRoutes } from "./routes/webhooks.ts";
-import {
-  BoardEnded,
-  BoardNotFound,
-  ContentTooLarge,
-  VersionConflict,
-  VersionNotFound,
-} from "./store.ts";
-import {
-  type DispatcherOptions,
-  InvalidWebhookUrl,
-  SubscriptionNotFound,
-  startWebhookDispatcher,
-} from "./webhooks.ts";
+import { serveLib, serveWebPath } from "./static.ts";
+import { type DispatcherOptions, startWebhookDispatcher } from "./webhooks.ts";
 
 interface Daemon {
   hostServer: Bun.Server<undefined>;
@@ -144,199 +129,6 @@ export function resolveRepoRoot(rootHint?: string): string {
 
 export function resolveWebDist(rootHint?: string): string {
   return join(resolveRepoRoot(rootHint), "web", "dist");
-}
-
-// Small explicit map (not Bun.file's sniffing) so header values are pinned by
-// tests and never pick up charset quirks per environment.
-const MIME_BY_EXTENSION: Record<string, string> = {
-  css: "text/css; charset=utf-8",
-  htm: "text/html; charset=utf-8",
-  html: "text/html; charset=utf-8",
-  ico: "image/x-icon",
-  js: "text/javascript; charset=utf-8",
-  json: "application/json",
-  map: "application/json",
-  mjs: "text/javascript; charset=utf-8",
-  png: "image/png",
-  svg: "image/svg+xml",
-  txt: "text/plain; charset=utf-8",
-  woff2: "font/woff2",
-};
-
-function contentTypeFor(path: string): string {
-  const dot = path.lastIndexOf(".");
-  const ext = dot === -1 ? "" : path.slice(dot + 1).toLowerCase();
-  // Unknown extensions stay octet-stream: never guess an active type.
-  return MIME_BY_EXTENSION[ext] ?? "application/octet-stream";
-}
-
-function decodeSegment(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    // malformed percent-escape: keep the raw segment rather than 500ing
-    return value;
-  }
-}
-
-// URL pathname → relative path inside web/dist. Segments are decoded first
-// (assets can carry %20 etc.), then anything that could escape the dist dir —
-// dot segments, embedded separators, NUL — rejects outright.
-function staticRelativePath(pathname: string): string | null {
-  const segments: string[] = [];
-  for (const raw of pathname.split("/")) {
-    if (raw.length === 0) {
-      continue;
-    }
-    const segment = decodeSegment(raw);
-    if (
-      segment === "." ||
-      segment === ".." ||
-      segment.includes("/") ||
-      segment.includes("\\") ||
-      segment.includes("\0")
-    ) {
-      return null;
-    }
-    segments.push(segment);
-  }
-  return segments.join("/");
-}
-
-function isFile(path: string): boolean {
-  try {
-    return statSync(path).isFile();
-  } catch {
-    return false;
-  }
-}
-
-function staticFileResponse(
-  path: string,
-  headers: Record<string, string>,
-): Response {
-  return new Response(Bun.file(path), {
-    headers: { ...headers, "content-type": contentTypeFor(path) },
-  });
-}
-
-function hasExtension(rel: string): boolean {
-  return rel.slice(rel.lastIndexOf("/") + 1).includes(".");
-}
-
-// SPA cache policy: vite emits content-hashed files under assets/ — those are
-// immutable forever. Everything else (index.html, the SPA shell fallback,
-// fonts) revalidates on every load so a rebuild can never leave a tab running
-// a stale bundle (dogfooded the hard way: Enter-to-submit "missing" was an old
-// cached bundle; the new one was on disk all along).
-function cacheControlFor(rel: string): string {
-  return rel.startsWith("assets/")
-    ? "public, max-age=31536000, immutable"
-    : "no-cache";
-}
-
-// Static serving for the host server: real files, the SPA shell for
-// extensionless unknown paths (hash routing means routes never hit the
-// server), and a pointed 404 when the SPA simply isn't built.
-function serveWebPath(
-  pathname: string,
-  webDist: string,
-  headers: Record<string, string>,
-): Response {
-  if (!existsSync(webDist)) {
-    return jsonError(404, "web_not_built", "run: make web", headers);
-  }
-  const rel = staticRelativePath(pathname);
-  if (rel === null) {
-    return jsonError(404, "not_found", "not found", headers);
-  }
-  const index = join(webDist, "index.html");
-  const candidate = rel.length === 0 ? index : join(webDist, rel);
-  const cacheHeaders = { ...headers, "cache-control": cacheControlFor(rel) };
-  if (isFile(candidate)) {
-    return staticFileResponse(candidate, cacheHeaders);
-  }
-  if (rel.length === 0 || hasExtension(rel)) {
-    return jsonError(404, "not_found", "not found", headers);
-  }
-  if (isFile(index)) {
-    return staticFileResponse(index, cacheHeaders);
-  }
-  return jsonError(404, "not_found", "not found", headers);
-}
-
-// StoreError → HTTP translation lives here and nowhere else (style guide):
-// handlers throw domain errors, this is the single mapping point.
-function errorResponse(
-  err: unknown,
-  headers: Record<string, string> = {},
-): Response {
-  if (err instanceof HttpError) {
-    return jsonError(err.status, err.code, err.message, headers);
-  }
-  if (err instanceof VersionConflict) {
-    // open-artifacts 409 pattern: agents read current_version and retry
-    return jsonError(409, "version_conflict", err.message, headers, {
-      current_version: err.current,
-    });
-  }
-  if (err instanceof BoardNotFound) {
-    return jsonError(404, "board_not_found", err.message, headers);
-  }
-  if (err instanceof CommentNotFound) {
-    return jsonError(404, "comment_not_found", err.message, headers);
-  }
-  // reuses the existing invalid_request code — no new API error code (the
-  // message carries the specifics)
-  if (err instanceof CommentBodyRequired) {
-    return jsonError(400, "invalid_request", err.message, headers);
-  }
-  if (err instanceof InvalidAnchor) {
-    return jsonError(400, "invalid_anchor", err.message, headers);
-  }
-  if (err instanceof VersionNotFound) {
-    return jsonError(404, "version_not_found", err.message, headers);
-  }
-  if (err instanceof BoardEnded) {
-    return jsonError(409, "board_ended", err.message, headers);
-  }
-  if (err instanceof ContentTooLarge) {
-    return jsonError(413, "payload_too_large", err.message, headers);
-  }
-  if (err instanceof AssetTooLarge) {
-    return jsonError(413, "asset_too_large", err.message, headers);
-  }
-  if (err instanceof BoardAssetQuotaExceeded) {
-    return jsonError(413, "board_asset_quota_exceeded", err.message, headers);
-  }
-  if (err instanceof AssetTypeNotAllowed) {
-    return jsonError(400, "asset_type_not_allowed", err.message, headers);
-  }
-  if (err instanceof AssetNotAnImage) {
-    return jsonError(400, "asset_not_an_image", err.message, headers);
-  }
-  if (err instanceof AssetUnreadable) {
-    return jsonError(400, "asset_path_unreadable", err.message, headers);
-  }
-  if (err instanceof InvalidAssetEmbed) {
-    // publish-time validation of markdown asset embeds — the agent's own src
-    // echoed back so the fix is actionable (dogfooded: "asset:undefined")
-    return jsonError(400, "invalid_asset_embed", err.message, headers);
-  }
-  if (err instanceof InvalidWebhookUrl) {
-    return jsonError(400, "invalid_webhook_url", err.message, headers);
-  }
-  if (err instanceof SubscriptionNotFound) {
-    return jsonError(404, "subscription_not_found", err.message, headers);
-  }
-  if (err instanceof ImportRejected) {
-    // 422 over 400: the request was well-formed HTTP; the bundle's CONTENT
-    // failed validation (quarantine, manifest schema, zip-slip) — the
-    // message names the failing item and nothing was written
-    return jsonError(422, "import_rejected", err.message, headers);
-  }
-  console.error("boardd: unhandled error", err);
-  return jsonError(500, "internal_error", "internal error", headers);
 }
 
 async function handleApiRequest(
@@ -427,9 +219,9 @@ function isApiPath(pathname: string): boolean {
   return pathname === "/api" || pathname.startsWith("/api/");
 }
 
-// The host server is three things in one: /api/* through the route table,
-// /libs/* (vendored pinned libs — D18: board scripts run in the app origin
-// and load them root-relative), board assets under /assets/<id>, and
+// The host server is four things in one: /api/* (plus /mcp) through the route
+// table, /libs/* (vendored pinned libs — D18: board scripts run in the app
+// origin and load them root-relative), board assets under /assets/<id>, and
 // everything else the built SPA — all with the same request hardening.
 async function handleHostRequest(
   req: Request,
@@ -447,6 +239,10 @@ async function handleHostRequest(
       headers,
     );
   }
+  // /mcp is mounted here as a bare branch, deliberately OUTSIDE the routes[]
+  // table: the table's middleware runs requireAuth, which accepts human
+  // session tokens, and the MCP endpoint is agent-tokens-only (D16 — see
+  // requireMcpActor). It also answers non-POST with its own 405 envelope.
   if (pathname === "/mcp") {
     return withHostHeaders(
       await handleMcpRequest(req, config, db, dataDir),
@@ -478,11 +274,6 @@ async function handleHostRequest(
   }
 }
 
-// Version documents are immutable by design (restoring republishes as a NEW
-// version — never a rewrite), and so are the vendored libs (filenames carry
-// the lib version — the upgrade contract adds a file, never rewrites one).
-const IMMUTABLE_CACHE = "public, max-age=31536000, immutable";
-
 // Every response class carries the host headers — CSP + nosniff on api/mcp
 // responses too (the route layer's jsonOk/jsonError know no headers; M7 audit:
 // docs/security.md "API hardening" applies to every request), plus no-cache
@@ -504,32 +295,6 @@ function withHostHeaders(
     status: res.status,
     statusText: res.statusText,
     headers: merged,
-  });
-}
-
-// GET /libs/<file> serves the vendored, version-stamped libraries from
-// <repo>/server/libs — D18: board scripts run in the app origin and load
-// them root-relative, so the host serves them itself. Filenames carry the
-// lib version, so an upgrade adds a file and immutable caching can never
-// strand an old board.
-function serveLib(
-  libsDir: string,
-  pathname: string,
-  headers: Record<string, string>,
-): Response {
-  // same decode-then-reject rules as web/dist statics: one flat segment, no
-  // dot segments, no embedded separators
-  const rel = staticRelativePath(pathname.slice("/libs/".length));
-  if (rel === null || rel.includes("/")) {
-    return jsonError(404, "not_found", "not found", headers);
-  }
-  const candidate = join(libsDir, rel);
-  if (!isFile(candidate)) {
-    return jsonError(404, "not_found", "not found", headers);
-  }
-  return staticFileResponse(candidate, {
-    ...headers,
-    "cache-control": IMMUTABLE_CACHE,
   });
 }
 

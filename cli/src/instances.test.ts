@@ -1,8 +1,9 @@
 // D20 wave-1 contract tests: `board up / down / instances` driven as REAL
 // subprocesses (the cli/src/main.test.ts pattern) with temp BOARD_DATA_DIR
-// everywhere — never the real ~/.board. Spawned daemons are tracked (via
-// instance.json's pid) and force-killed in afterAll so a failing assertion
-// cannot leak a process.
+// everywhere — never the real ~/.board. The subprocess driver, the `board up`
+// stdout parser and the spawned-daemon tracking come from cli/test/harness.ts
+// — one copy, shared with resolve/resume and the smoke. Tracked daemons are
+// force-killed in afterAll so a failing assertion cannot leak a process.
 import { afterAll, describe, expect, test } from "bun:test";
 import {
   existsSync,
@@ -10,7 +11,6 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
-  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -18,117 +18,25 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startTestServer } from "../../server/test/helpers.ts";
 import {
+  awaitGone,
+  boardIdFrom,
+  createCliHarness,
+  parseUp,
+} from "../test/harness.ts";
+import {
   instancePaths,
   instancesRoot,
   readInstanceEntry,
+  spawnInstance,
   writeInstanceEntry,
 } from "./instances.ts";
 
-const dirs: string[] = [];
-const spawned: Array<{ pid: number; dataDir: string }> = [];
+const harness = createCliHarness("board-cli-instances-test-");
+const { freshDir, runCli, trackDaemon, trackDir, trackInstance } = harness;
 
-afterAll(async () => {
-  for (const { pid } of spawned) {
-    if (existsSync(`/proc/${pid}`)) {
-      try {
-        process.kill(pid, "SIGKILL");
-      } catch {
-        // already gone
-      }
-    }
-  }
-  // The instance temp data dirs too — a test failing before its down must
-  // not orphan /tmp/board-instance-* dirs.
-  for (const { dataDir } of spawned) {
-    rmSync(dataDir, { recursive: true, force: true });
-  }
-  for (const dir of dirs) {
-    rmSync(dir, { recursive: true, force: true });
-  }
+afterAll(() => {
+  harness.cleanup();
 });
-
-function freshDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "board-cli-instances-test-"));
-  dirs.push(dir);
-  return dir;
-}
-
-interface Proc {
-  exitCode: number;
-  stdout: string;
-  stderr: string;
-}
-
-async function runCli(
-  args: string[],
-  env: Record<string, string> = {},
-): Promise<Proc> {
-  const proc = Bun.spawn(
-    [process.execPath, join(import.meta.dir, "main.ts"), ...args],
-    { env, stdout: "pipe", stderr: "pipe" },
-  );
-  const [exitCode, stdout, stderr] = await Promise.all([
-    proc.exited,
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ]);
-  return { exitCode: exitCode ?? -1, stdout, stderr };
-}
-
-interface UpOutput {
-  id: string;
-  url: string;
-  token: string;
-  envPath: string;
-  human?: string;
-}
-
-function parseUp(stdout: string): UpOutput {
-  const head =
-    /instance (s-[0-9A-Za-z]{10}) listening on (http:\/\/127\.0\.0\.1:\d+)/.exec(
-      stdout,
-    );
-  const token =
-    /^agent token \(print once — it is not recoverable\): (\S+)$/m.exec(
-      stdout,
-    )?.[1];
-  const envPath =
-    /^credentials env file \(agent shells: source it\): (.+)$/m.exec(
-      stdout,
-    )?.[1];
-  const human = /^human link: (.+)$/m.exec(stdout)?.[1];
-  if (head === null || token === undefined || envPath === undefined) {
-    throw new Error(`could not parse up output:\n${stdout}`);
-  }
-  return { id: head[1] ?? "", url: head[2] ?? "", token, envPath, human };
-}
-
-// Track a live instance for afterAll force-kill, reading the pid back from
-// the registry (the CLI output deliberately does not print the pid).
-function trackInstance(dir: string, up: UpOutput): void {
-  const entry = JSON.parse(
-    readFileSync(instancePaths(dir, up.id).json, "utf8"),
-  ) as { pid: number; dataDir: string };
-  spawned.push({ pid: entry.pid, dataDir: entry.dataDir });
-}
-
-function boardIdFrom(up: UpOutput): string {
-  const id = /#\/boards\/([0-9A-Za-z]{10})/.exec(up.human ?? "")?.[1];
-  if (id === undefined) {
-    throw new Error(`no human link board id in up output:\n${up.human}`);
-  }
-  return id;
-}
-
-async function awaitGone(pid: number, timeoutMs = 5000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (existsSync(`/proc/${pid}`)) {
-    if (Date.now() > deadline) {
-      throw new Error(`pid ${pid} still alive after ${timeoutMs}ms`);
-    }
-    await Bun.sleep(50);
-  }
-}
 
 // The instance port must REFUSE connections (dead daemon), not merely error.
 async function expectRefused(url: string): Promise<void> {
@@ -431,7 +339,7 @@ describe("board down", () => {
     // proven by re-importing it (import restores the exported status)
     expect(readdirSync(paths.boards)).toEqual([`${boardId}.zip`]);
     const server = startTestServer();
-    dirs.push(server.dataDir);
+    trackDir(server.dataDir);
     try {
       const reimporter = await server.createAgent("reimport");
       const ires = await fetch(`${server.hostUrl}/api/boards/import`, {
@@ -507,7 +415,7 @@ describe("board down", () => {
       // must be a structurally valid session dir so the F1 shape guard
       // passes and the PID-identity refusal is what fires here
       const spoofDataDir = mkdtempSync(join(tmpdir(), "board-instance-"));
-      dirs.push(spoofDataDir); // the foreign-pid refusal must not leak it
+      trackDir(spoofDataDir); // the foreign-pid refusal must not leak it
       writeInstanceEntry(paths, {
         id,
         pid: decoy.pid,
@@ -538,7 +446,7 @@ describe("board down", () => {
     // a session temp dir, plus a crafted entry pointing `down` at it —
     // without the structural guard this SIGTERMs the victim and purges it
     const victim = mkdtempSync(join(tmpdir(), "board-victim-"));
-    dirs.push(victim);
+    trackDir(victim);
     const decoy = Bun.spawn(
       [
         process.execPath,
@@ -551,7 +459,7 @@ describe("board down", () => {
         stderr: "ignore",
       },
     );
-    spawned.push({ pid: decoy.pid, dataDir: victim });
+    trackDaemon({ pid: decoy.pid, dataDir: victim });
     expect(existsSync(`/proc/${decoy.pid}`)).toBe(true); // alive pre-down
 
     const id = "s-decoyed000";
@@ -674,7 +582,7 @@ describe("board instances / prune", () => {
     // young booting entry with an already-dead pid: ONLY the boot-age guard
     // protects it (another shell's up may still be mid-boot)
     const youngDir = mkdtempSync(join(tmpdir(), "board-instance-"));
-    dirs.push(youngDir);
+    trackDir(youngDir);
     const youngId = "s-youngboot0";
     mkdirSync(instancePaths(dir, youngId).dir, { recursive: true });
     writeInstanceEntry(instancePaths(dir, youngId), {
@@ -728,7 +636,7 @@ describe("boot-window orphaning (audit F3)", () => {
     );
     const booting = await awaitBootingEntry(dir);
     // track for afterAll in case an assert fails before down
-    spawned.push({ pid: booting.pid, dataDir: booting.dataDir });
+    trackDaemon({ pid: booting.pid, dataDir: booting.dataDir });
     // minimal pre-readiness shape: no port/url yet
     expect(booting.url).toBeUndefined();
     // the daemon is real and carries the instance's BOARD_DATA_DIR (the
@@ -759,7 +667,7 @@ describe("boot-window orphaning (audit F3)", () => {
     );
     const booting = await awaitBootingEntry(dir);
     // track for afterAll in case an assert fails mid-test
-    spawned.push({ pid: booting.pid, dataDir: booting.dataDir });
+    trackDaemon({ pid: booting.pid, dataDir: booting.dataDir });
     up.kill("SIGTERM");
     const code = await up.exited;
     expect(code).toBe(143); // the boot-window handler's non-zero exit
@@ -768,6 +676,76 @@ describe("boot-window orphaning (audit F3)", () => {
     await awaitGone(booting.pid);
     expect(existsSync(booting.dataDir)).toBe(false);
     expect(existsSync(instancePaths(dir, booting.id).dir)).toBe(false);
+  }, 30_000);
+
+  // Every live daemon whose BOARD_DATA_DIR is an OS-temp instance dir. The
+  // daemon is not this process's child, so /proc is the only way to see it —
+  // and filesystem assertions cannot: an unkilled daemon RECREATES the temp
+  // dir that rmSync just deleted, so "no leaked dir" passes while an orphan
+  // holding a live token runs on (found by audit, 2026-09-25).
+  const liveInstanceDaemons = (): number[] => {
+    const pids: number[] = [];
+    for (const name of readdirSync("/proc")) {
+      if (!/^\d+$/.test(name)) {
+        continue;
+      }
+      try {
+        const environ = readFileSync(`/proc/${name}/environ`, "utf8");
+        if (
+          environ.includes(
+            `BOARD_DATA_DIR=${join(tmpdir(), "board-instance-")}`,
+          )
+        ) {
+          pids.push(Number(name));
+        }
+      } catch {
+        // the process exited between readdir and read, or is not ours
+      }
+    }
+    return pids;
+  };
+
+  // The other way a boot ends badly: readiness never arrives. It runs the SAME
+  // abortBoot closure as the two signal tests above (they were two hand-copied
+  // cleanups before, with only a comment asserting they matched). The signal
+  // tests assert the daemon dies via awaitGone; this one cannot — spawnInstance
+  // rejects without handing back a pid — so it asserts the same invariant by
+  // scanning /proc. Without that scan this test passes with the SIGKILL removed
+  // from abortBoot, which is the one half of the cleanup consolidation could
+  // ever break.
+  test("a boot that never becomes ready leaves no daemon, no temp dir, no entry", async () => {
+    const dir = freshDir();
+    const daemonsBefore = new Set(liveInstanceDaemons());
+    const tempBefore = new Set(
+      readdirSync(tmpdir()).filter((name) =>
+        name.startsWith("board-instance-"),
+      ),
+    );
+    // 1ms is shorter than any real boot, so readiness cannot win the race.
+    await expect(
+      spawnInstance({
+        registryDataDir: dir,
+        agentTokenName: "session",
+        readyTimeoutMs: 1,
+      }),
+    ).rejects.toThrow(/not ready after 1ms|exited before becoming ready/);
+    // The daemon first: an orphan is the failure that costs something (a live
+    // process holding an unrecoverable token), and it is the one a leaked-dir
+    // check cannot see.
+    const orphans = liveInstanceDaemons().filter(
+      (pid) => !daemonsBefore.has(pid),
+    );
+    for (const pid of orphans) {
+      trackDaemon({ pid, dataDir: "" });
+    }
+    expect(orphans).toEqual([]);
+    const leaked = readdirSync(tmpdir()).filter(
+      (name) => name.startsWith("board-instance-") && !tempBefore.has(name),
+    );
+    expect(leaked).toEqual([]);
+    expect(
+      existsSync(instancesRoot(dir)) ? readdirSync(instancesRoot(dir)) : [],
+    ).toEqual([]);
   }, 30_000);
 
   test("contract 16: down --instance <id> works; positional still does (N6)", async () => {

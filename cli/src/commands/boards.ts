@@ -6,9 +6,10 @@
 // same sanctioned local-disk read down's keepsake path uses.
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { buildBundle } from "../../../server/src/bundle.ts";
+import { buildBundle } from "../../../server/src/bundle-export.ts";
 import type { Config } from "../../../server/src/config.ts";
 import { openDb } from "../../../server/src/db.ts";
+import { errText } from "../../../server/src/err-text.ts";
 import {
   type ExportTarget,
   exportTarget,
@@ -97,7 +98,7 @@ async function exportClosed(
     zip = buildBundle(db, sel.entry.dataDir, boardId);
   } catch (err) {
     io.stderr(
-      `board: could not export "${boardId}" from instance "${sel.entry.id}" on disk (${err instanceof Error ? err.message : String(err)})`,
+      `board: could not export "${boardId}" from instance "${sel.entry.id}" on disk (${errText(err)})`,
     );
     return 1;
   } finally {
@@ -106,9 +107,7 @@ async function exportClosed(
   try {
     await Bun.write(file, zip);
   } catch (err) {
-    io.stderr(
-      `board: could not write ${file} (${err instanceof Error ? err.message : String(err)})`,
-    );
+    io.stderr(`board: could not write ${file} (${errText(err)})`);
     return 1;
   }
   io.stdout(`wrote ${file} (${zip.byteLength} bytes)`);
@@ -137,9 +136,7 @@ async function runExportCommand(
   try {
     await Bun.write(file, bytes);
   } catch (err) {
-    io.stderr(
-      `board: could not write ${file} (${err instanceof Error ? err.message : String(err)})`,
-    );
+    io.stderr(`board: could not write ${file} (${errText(err)})`);
     return 1;
   }
   io.stdout(`wrote ${file} (${bytes.byteLength} bytes)`);
@@ -179,9 +176,7 @@ async function runImportCommand(
   try {
     bytes = new Uint8Array(await Bun.file(file).arrayBuffer());
   } catch (err) {
-    io.stderr(
-      `board: could not read ${file} (${err instanceof Error ? err.message : String(err)})`,
-    );
+    io.stderr(`board: could not read ${file} (${errText(err)})`);
     return 1;
   }
   try {
@@ -189,7 +184,7 @@ async function runImportCommand(
     io.stdout(`imported "${board.title}" as board ${board.id}`);
     return 0;
   } catch (err) {
-    io.stderr(`board: ${err instanceof Error ? err.message : String(err)}`);
+    io.stderr(`board: ${errText(err)}`);
     return 1;
   }
 }
