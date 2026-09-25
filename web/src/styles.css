@@ -151,9 +151,14 @@ body {
   margin-top: 6px;
 }
 
+/* Corner radii carry a hierarchy (dogfooded — "they look like ovals"): panels
+   and cards 8–10px, anything button-sized 6px, small inline chips 4px. Nothing
+   containing a WORD is fully rounded, because a pill around a long label is an
+   ellipse. The one survivor of 999px is the numeric thread-count badge, where
+   full rounding on one digit is a dot, not an oval. */
 .badge {
   padding: 1px 8px;
-  border-radius: 999px;
+  border-radius: 6px;
   font-size: 0.8em;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -179,7 +184,7 @@ body {
 .tag {
   font-size: 0.75em;
   padding: 1px 8px;
-  border-radius: 999px;
+  border-radius: 4px;
   background: var(--bg-subtle);
   border: 1px solid var(--border-subtle);
   color: var(--fg-muted);
@@ -213,7 +218,7 @@ body {
   border: 1px solid var(--border-subtle);
   background: var(--bg);
   color: var(--fg-muted);
-  border-radius: 999px;
+  border-radius: 6px;
   padding: 3px 12px;
   font-size: 0.85em;
   cursor: pointer;
@@ -401,7 +406,7 @@ body {
   background: var(--bg-subtle);
   border: 1px solid var(--border-subtle);
   color: var(--fg-muted);
-  border-radius: 999px;
+  border-radius: 4px;
   padding: 1px 9px;
   margin-bottom: 6px;
 }
@@ -504,7 +509,7 @@ body {
   background: var(--primary);
   color: var(--bg);
   border: none;
-  border-radius: 999px;
+  border-radius: 6px;
   padding: 5px 16px;
   cursor: pointer;
   font-weight: 600;
@@ -530,7 +535,7 @@ body {
   background: var(--primary);
   color: var(--bg);
   border: none;
-  border-radius: 999px;
+  border-radius: 6px;
   padding: 5px 14px;
   font-size: 0.8em;
   font-weight: 600;
@@ -909,7 +914,7 @@ body {
   background: var(--bg-subtle);
   border: 1px solid var(--border-subtle);
   color: var(--fg-muted);
-  border-radius: 999px;
+  border-radius: 4px;
   padding: 1px 9px;
 }
 

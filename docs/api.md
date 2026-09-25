@@ -158,6 +158,12 @@ The app's theme tokens are `:root` custom properties on this same document, so a
 
 Any CSS a board adds itself **must be scoped to its own wrapper id**. A bare `body`, `*`, `h1` or `:root` rule restyles the app.
 
+### Globals the app provides
+
+| Global | What it does |
+|---|---|
+| `window.boardChartTheme()` | Pushes Board's theme tokens into `Chart.defaults` (text, grid, border, font) and returns a 7-colour series palette drawn from `--accent`, `--primary`, `--secondary`, `--info`, `--success`, `--warning`, `--error`. Re-reads the tokens on every call, because the theme follows `prefers-color-scheme`. **Throws** if Chart.js is not loaded — a silent no-op would surface later as an off-theme chart with nothing to explain it. |
+
 ### Board scripts share one global scope
 
 An html board's inline scripts are re-created in the host document and run in its global scope — the **same** scope as every other board opened in that browser session. A top-level `const`/`let` throws `already been declared` on the second board, and a script that throws never runs, so that board renders nothing. Board scripts must wrap their bodies in an IIFE. The app cannot fix this retroactively: published versions are immutable, and some boards legitimately define globals.

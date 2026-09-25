@@ -249,9 +249,22 @@ Prose is the worst format for most of what goes on a board. If following your pa
 | A table of options against criteria | either | GFM table; rows are individually comment-anchorable |
 | Math | **markdown** | `$x^2$` inline, `$$…$$` display — katex at publish time |
 | Syntax-highlighted code or pseudocode | **markdown** | a fenced block with a language tag |
-| A live chart — measured over time or category | **html** | `<script src="/libs/chart-4.4.9.umd.min.js"></script>`, vendored and pinned. Put it in `<head>`: externals are awaited in document order before your inline code runs |
+| A live chart — measured over time or category | **html** | `<script src="/libs/chart-4.4.9.umd.min.js"></script>`, vendored and pinned. Put it in `<head>`: externals are awaited in document order before your inline code runs. Then call `boardChartTheme()` — see below |
 | Questions the human clicks answers into | **html** | the `interview` skill — `skills/interview/SKILL.md` |
 | A screenshot or an image you generated | either | `board_upload_image`, then the snippet it hands back |
+
+**Charts: call `boardChartTheme()` first.** Chart.js draws in its own grey-on-white palette, which has nothing to do with Board's theme and is close to unreadable on the dark one. One call fixes it:
+
+```js
+const palette = boardChartTheme();   // also sets Chart.defaults from Board's tokens
+new Chart(canvas, {
+  type: "bar",
+  data: { labels, datasets: [{ label: "after", data, backgroundColor: palette[0] }] },
+  options: { maintainAspectRatio: false },   // then give the canvas a parent with a height
+});
+```
+
+It throws if Chart.js has not loaded yet, which is the failure you want — the alternative is a chart that renders wrong with no clue why. And if you set `maintainAspectRatio: false`, put the canvas in a container with an explicit height, or it grows without bound (dogfooded: a 41,849px tall chart).
 
 Charts are not decoration. A number that matters across time or category is a chart; a paragraph describing that chart is a worse version of the same information. Put a `data-ba` id on a diagram or a section and it stays commentable — the human can anchor a comment to the picture itself.
 

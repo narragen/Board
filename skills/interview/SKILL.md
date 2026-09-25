@@ -73,7 +73,7 @@ Every question also gets a visible free-text note field. The template puts it th
 
 Start from `skills/templates/interview-round.html`: fill in the heading, the intro line, and the `QUESTIONS` array. Everything else renders itself.
 
-It already handles styling (`class="board-ui"`, themed, dark mode included) and the IIFE your script must live in. The `board` skill has the rules behind both, plus what a diagram or chart needs.
+It already handles styling — `class="board-ui"` for form chrome plus Tailwind loaded and ready (D28) — and the IIFE your script must live in. The `board` skill has the rules behind both, plus what a diagram or chart needs. If you use Tailwind, take colors from Board's tokens (`bg-[var(--bg-subtle)]`), never from Tailwind's palette.
 
 **The one thing not to work around: the submit call lives in that file.** Do not hand-roll that fetch in a board, even when it looks like three lines — when the narrow answer channel lands (NAR-1862), one file changes instead of every board any agent ever published.
 

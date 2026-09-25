@@ -76,12 +76,21 @@
 </section>
 
 <script>
-  // static demo data — replace with your own
+(() => {
+  // Wrapped in an IIFE: board scripts share one global scope with every other
+  // board opened in the same browser session, so a top-level declaration
+  // collides on the second one (D27).
+  // boardChartTheme() pushes Board's theme tokens into Chart.defaults and hands
+  // back a series palette, so the chart matches the app in either colour scheme.
+  // Without it Chart.js draws grey-on-white, which is close to unreadable on the
+  // dark theme. It throws if chart.js has not loaded — deliberately loud.
+  const palette = boardChartTheme();
   new Chart(document.getElementById("loop"), {
     type: "bar",
     data: {
       labels: ["boards published", "comments", "threads resolved"],
-      datasets: [{ label: "dogfood loop so far", data: [5, 46, 31] }]
+      // static demo data — replace with your own
+      datasets: [{ label: "dogfood loop so far", data: [5, 46, 31], backgroundColor: palette[0] }]
     },
     options: { responsive: false, plugins: { legend: { display: false } } }
   });
@@ -106,6 +115,7 @@
       tally.appendChild(row);
     });
   });
+})();
 </script>
 </div>
 </body>

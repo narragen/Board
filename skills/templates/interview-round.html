@@ -5,12 +5,29 @@
   Two things to fill in: the heading and intro text in the body, and the
   QUESTIONS array in the CONFIG block. Everything else renders itself.
 
-  STYLING IS ALREADY DONE. The wrapper below is <div class="board-ui">, which
-  the board app styles with its own theme tokens — dark mode included. Write
-  semantic HTML inside it and it looks right. Only add a <style> block to
-  override something, and scope every rule you add to your own wrapper id: an
-  html board mounts into the host page with no iframe (D18), so a bare `body`,
-  `h1` or `:root` rule restyles the whole board app.
+  STYLING IS ALREADY DONE, twice over.
+
+  1. The wrapper is <div class="board-ui">, which the board app styles with
+     its own theme tokens — dark mode included. Write semantic HTML inside it
+     (fieldset, legend, label, button) and it looks right.
+  2. Tailwind is loaded above, vendored and pinned. Use utilities freely for
+     layout and spacing.
+
+  ONE RULE if you reach for Tailwind: take colors from Board's tokens, never
+  from Tailwind's palette. Tailwind assumes a white page; Board runs
+  color-scheme: light dark, so `bg-white text-gray-900` is a white card on a
+  near-black app for half your readers. Write it this way instead:
+
+      class="rounded-lg p-4 bg-[var(--bg-subtle)] text-[var(--fg)]"
+
+  Layout, spacing and type utilities need none of this — it is only color.
+  If Tailwind fails to load, .board-ui still carries the page; the round stays
+  readable and submittable, just plainer.
+
+  Adding your own <style> is fine for anything neither covers. Scope every
+  rule to your own wrapper id: an html board mounts into the host page with no
+  iframe (D18), so a bare `body`, `h1` or `:root` rule restyles the whole
+  board app.
 
   The six question types, and the answer each one sends back:
 
@@ -40,6 +57,7 @@
 <head>
 <meta charset="utf-8">
 <title>Interview round</title>
+<script src="/libs/tailwind-4.3.3.browser.js"></script>
 </head>
 <body>
 <div class="board-ui">
@@ -57,9 +75,10 @@
     </ul>
   </div>
   <form id="round">
-    <div class="bar">
-      <p>One button sends <b>everything on this page at once</b> — every choice and
-        every note, as a single comment. Nothing is sent until you press it.</p>
+    <div class="bar flex flex-wrap items-center gap-4">
+      <p class="flex-1 min-w-[18rem] m-0">One button sends <b>everything on this page at
+        once</b> — every choice and every note, as a single comment. Nothing is sent
+        until you press it.</p>
       <button type="submit">Submit answers</button>
     </div>
   </form>
@@ -128,7 +147,7 @@ function control(q) {
 form.insertAdjacentHTML("afterbegin", QUESTIONS.map((q) => `
   <fieldset>
     <legend>${q.n} · ${q.title}</legend>
-    <div>${q.body}</div>
+    <div class="mb-2">${q.body}</div>
     <p class="rec"><b>Recommended: ${Array.isArray(q.rec) ? q.rec.join(", ") : q.rec}.</b> ${q.why || ""}</p>
     ${control(q)}
     <label class="note">Note — optional, and the most useful thing you can tell me is that the options themselves are wrong.

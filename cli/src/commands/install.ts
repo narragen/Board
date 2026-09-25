@@ -12,6 +12,7 @@ import {
   applyEdits,
   modify,
   type ParseError,
+  parse,
   parseTree,
   printParseErrorCode,
 } from "jsonc-parser";
@@ -146,6 +147,61 @@ const SKILL_NAMES = ["board", "interview"] as const;
 
 // Where each agent looks for skills. codex and pi share one root on purpose —
 // neither has automated MCP wiring, but both read ~/.agents/skills.
+// The credential already wired into an agent's config (D28, ruled C).
+//
+// Re-writing an MCP entry needs the plaintext token, and the plaintext only
+// exists at mint time — tokens are stored hashed (invariant 7). That used to
+// mean the only way to refresh a stale entry shape was `--force`, which
+// revokes and re-mints every agent's credential on every update. But the
+// plaintext is already in the file we are about to rewrite, so read it back
+// and reuse it: nothing new is stored, nothing is printed, and the entry gets
+// the current shape without costing anyone their session.
+//
+// Returns null when there is no entry to read — a first install, or a config
+// this never wired.
+function readWiredToken(agent: Agent): string | null {
+  try {
+    if (agent === "opencode") {
+      const path = opencodeConfigPath(join(configHome(), "opencode"));
+      if (!existsSync(path)) {
+        return null;
+      }
+      const config = parse(readFileSync(path, "utf8"), [], {
+        allowTrailingComma: true,
+      }) as Record<string, unknown> | undefined;
+      const mcp = config?.mcp as Record<string, unknown> | undefined;
+      const servers = mcp?.servers as Record<string, unknown> | undefined;
+      // the D24 native shape first, then the pre-D24 legacy one
+      for (const entry of [servers?.board, mcp?.board]) {
+        const env = (entry as { environment?: Record<string, unknown> })
+          ?.environment;
+        const token = env?.BOARD_MCP_TOKEN;
+        if (typeof token === "string" && token.length > 0) {
+          return token;
+        }
+      }
+      return null;
+    }
+    if (agent === "claude") {
+      const path = join(homeDir(), ".claude.json");
+      if (!existsSync(path)) {
+        return null;
+      }
+      const config = JSON.parse(readFileSync(path, "utf8")) as {
+        mcpServers?: Record<string, { env?: Record<string, unknown> }>;
+      };
+      const token = config.mcpServers?.board?.env?.BOARD_MCP_TOKEN;
+      return typeof token === "string" && token.length > 0 ? token : null;
+    }
+    // codex and pi are paste-a-snippet only — nothing of ours to read back
+    return null;
+  } catch {
+    // an unreadable or malformed config is not a failure here: the caller
+    // falls back to telling the human to re-mint
+    return null;
+  }
+}
+
 function agentSkillsRoot(agent: Agent): string {
   switch (agent) {
     case "opencode":
@@ -395,6 +451,13 @@ function wireClaude(
 ): boolean {
   let ok = true;
   if (claudeOnPath()) {
+    // Remove first, ALWAYS. `claude mcp add` on a name that already exists
+    // prints "MCP server board already exists in user config" and exits 0 —
+    // a silent no-op that we then reported as "wired" (measured against claude
+    // 2.1.282). With --force that was actively harmful: the old token had just
+    // been revoked, the new one never reached the config, and every board tool
+    // call 401'd until someone hand-edited ~/.claude.json. `remove` on a name
+    // that is not there is harmless, so this is unconditional.
     // Stdio form (D22): the real `claude mcp add` syntax — name, then
     // `--env KEY=value`, then `--` and the connector command (transport
     // defaults to stdio). Verified against `claude mcp add --help`.
@@ -411,6 +474,9 @@ function wireClaude(
       MCP_CONNECTOR_PATH,
     ];
     try {
+      // Inside the try so a read-only config surfaces as the container case
+      // rather than an unhandled throw.
+      runClaude(["mcp", "remove", "--scope", "user", "board"]);
       if (runClaude(args) === 0) {
         io.stdout("wired: claude mcp (user scope)");
       } else {
@@ -554,8 +620,24 @@ export function runInstallCommand({
         `token for "${token.name}" (store it now — it is stored hashed and cannot be shown again):`,
       );
       io.stdout(token.token);
-      // MCP config wiring still needs the plaintext, so it rides the mint.
       ok = wireAgent(agent, token.token, io, claudeOnPath, runClaude) && ok;
+    } else {
+      // Nothing minted, so this agent already has a live credential. Rewrite
+      // its MCP entry around the token already in its config (D28) — that is
+      // how a shape change like D24 reaches an existing install without
+      // rotating anything. Never printed: it is the same secret, already at
+      // rest where we found it.
+      const wired = readWiredToken(agent);
+      if (wired !== null) {
+        ok = wireAgent(agent, wired, io, claudeOnPath, runClaude) && ok;
+        io.stdout(
+          `re-wired ${agent} with its existing credential — not rotated, no session restart needed`,
+        );
+      } else if (agent === "opencode" || agent === "claude") {
+        io.stdout(
+          `no board credential found in ${agent}'s config — re-mint with: make install FLAGS=--force`,
+        );
+      }
     }
     if (!ok) {
       failed.push(agent);

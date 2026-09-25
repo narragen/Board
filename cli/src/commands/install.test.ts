@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type ParseError, parse } from "jsonc-parser";
 import { openDb } from "../../../server/src/db.ts";
+import { createToken } from "../../../server/src/tokens.ts";
 import {
   INSTALL_USAGE,
   MCP_CONNECTOR_COMMAND,
@@ -604,6 +605,122 @@ describe("board install wiring", () => {
     expect(other.err.join("\n")).not.toContain("inside a container");
   });
 
+  // D28: a re-run refreshes the MCP entry SHAPE without rotating credentials.
+  // The plaintext is unavailable after the mint (stored hashed, invariant 7) —
+  // but it is already sitting in the config we are about to rewrite, so it is
+  // read back and reused. This is what makes a shape change like D24 reach an
+  // existing install without costing every agent its session.
+  test("a re-run rewires opencode with the token already in its config", () => {
+    withIsolatedEnv(({ xdg }) => {
+      const db = freshDb();
+      const first = capture();
+      expect(
+        runInstallCommand({
+          db,
+          argv: ["--agents", "opencode"],
+          io: first.io,
+          checkHealth: HEALTHY,
+          claudeOnPath: NO_CLAUDE,
+        }),
+      ).toBe(0);
+      const minted = tokenLines(first.out)[0];
+      const configPath = join(xdg, "opencode", "opencode.jsonc");
+      const wiredToken = (): string =>
+        (
+          parse(readFileSync(configPath, "utf8"), [], {
+            allowTrailingComma: true,
+          }) as {
+            mcp: { servers: { board: { environment: Record<string, string> } } };
+          }
+        ).mcp.servers.board.environment.BOARD_MCP_TOKEN;
+      expect(wiredToken()).toBe(minted);
+
+      // corrupt the entry the way a stale shape would look, then re-run
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          mcp: {
+            servers: {
+              board: {
+                type: "local",
+                command: ["stale"],
+                environment: { BOARD_MCP_TOKEN: minted },
+              },
+            },
+          },
+        }),
+      );
+
+      const second = capture();
+      expect(
+        runInstallCommand({
+          db,
+          argv: ["--agents", "opencode"],
+          io: second.io,
+          checkHealth: HEALTHY,
+          claudeOnPath: NO_CLAUDE,
+        }),
+      ).toBe(0);
+      // nothing minted, nothing printed, same credential still wired
+      expect(tokenLines(second.out)).toEqual([]);
+      expect(wiredToken()).toBe(minted);
+      expect(second.out.join("\n")).toContain(
+        "re-wired opencode with its existing credential",
+      );
+      // ...and the entry shape is current again, not the stale one
+      const entry = (
+        parse(readFileSync(configPath, "utf8"), [], {
+          allowTrailingComma: true,
+        }) as {
+          mcp: {
+            servers: {
+              board: { command: string[]; timeout: { catalog: number } };
+            };
+          };
+        }
+      ).mcp.servers.board;
+      expect(entry.command).not.toEqual(["stale"]);
+      expect(entry.timeout.catalog).toBe(60000);
+      db.close();
+    });
+  });
+
+  test("a re-run reads claude's wired token back out of ~/.claude.json", () => {
+    withIsolatedEnv(({ home }) => {
+      const db = freshDb();
+      const existing = "tok-already-wired";
+      writeFileSync(
+        join(home, ".claude.json"),
+        JSON.stringify({
+          mcpServers: { board: { env: { BOARD_MCP_TOKEN: existing } } },
+        }),
+      );
+      // an agent that already holds a credential: mintToken returns null
+      createToken(db, { name: "board-claude" });
+
+      const { out, io } = capture();
+      const calls: string[][] = [];
+      expect(
+        runInstallCommand({
+          db,
+          argv: ["--agents", "claude"],
+          io,
+          checkHealth: HEALTHY,
+          claudeOnPath: () => true,
+          runClaude: (args) => {
+            calls.push(args);
+            return 0;
+          },
+        }),
+      ).toBe(0);
+      expect(tokenLines(out)).toEqual([]);
+      expect(calls[1]).toContain(`BOARD_MCP_TOKEN=${existing}`);
+      // the secret is reused, never echoed
+      expect(out.join("\n")).not.toContain(existing);
+      db.close();
+    });
+  });
+
   test("claude on PATH runs `claude mcp add` with verified flags and no manual fallback", () => {
     withIsolatedEnv(() => {
       const db = freshDb();
@@ -621,11 +738,16 @@ describe("board install wiring", () => {
         },
       });
       expect(code).toBe(0);
-      expect(calls).toHaveLength(1);
+      // D28: remove ALWAYS precedes add. `claude mcp add` on an existing name
+      // prints "already exists" and exits 0 — a silent no-op we reported as
+      // success, which under --force left the freshly revoked token in the
+      // config (measured against claude 2.1.282).
+      expect(calls).toHaveLength(2);
+      expect(calls[0]).toEqual(["mcp", "remove", "--scope", "user", "board"]);
       // Stdio form (D22), verified against `claude mcp add --help`: name, then
       // --env KEY=value, then `--` and the connector command (transport
       // defaults to stdio; no --transport/--header/--url needed).
-      expect(calls[0]).toEqual([
+      expect(calls[1]).toEqual([
         "mcp",
         "add",
         "--scope",
