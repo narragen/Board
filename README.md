@@ -1,5 +1,7 @@
 # board
 
+![](./assets/example-screenshot.png)
+
 **A shared board for you and your coding agents, running on your own machine.**
 
 Your agent publishes a plan, a decision brief, a chart, or a set of questions to a board. You open it in a browser, and comment on the exact sentence, table row, or part of an image you mean. The agent reads those comments as structured feedback and carries on. No cloud, no accounts — a daemon on `127.0.0.1` and a folder in your home directory.
