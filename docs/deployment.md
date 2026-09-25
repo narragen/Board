@@ -24,7 +24,7 @@ make install     # wire the board MCP server into local agents + mint their toke
 
 - Probes `GET /api/health` first (a down daemon is a warning, not a failure — and since D22 wiring works regardless: the local connector lists the board tools offline, and its tool calls explain how to start a server when one is needed).
 - Mints one agent token per target agent, named `board-<agent>`. The plaintext is **printed once** — it is stored SHA-256 and cannot be shown again (invariant 7/8). Lost it? Re-mint.
-- Wires **opencode**: comment-preserving merge of a `mcp.servers.board` entry into the existing `~/.config/opencode/opencode.{jsonc,json}`, plus the skill copied to `~/.config/opencode/skills/board/`. Since D22 the entry is a **local stdio command** — opencode spawns the connector, which resolves a real board server per request — not a remote URL. The shape is opencode v2's native one (D24):
+- Wires **opencode**: comment-preserving merge of a `mcp.servers.board` entry into the existing `~/.config/opencode/opencode.{jsonc,json}`, plus the skills copied to `~/.config/opencode/skills/` (`board/` and `interview/` — D25). Since D22 the entry is a **local stdio command** — opencode spawns the connector, which resolves a real board server per request — not a remote URL. The shape is opencode v2's native one (D24):
 
   ```jsonc
   "mcp": { "servers": {

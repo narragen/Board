@@ -12,6 +12,7 @@ import {
   applyEdits,
   modify,
   type ParseError,
+  parse,
   parseTree,
   printParseErrorCode,
 } from "jsonc-parser";
@@ -139,15 +140,83 @@ function defaultRunClaude(args: string[]): number {
   return proc.exitCode ?? 1;
 }
 
-const REPO_SKILL = join(
-  import.meta.dir,
-  "..",
-  "..",
-  "..",
-  "skills",
-  "board",
-  "SKILL.md",
-);
+// Every skill board ships. `board` is the review loop; `interview` is the
+// scoping method that drives it (D25). Both land in the same per-agent skills
+// root, so adding a third is one entry here.
+const SKILL_NAMES = ["board", "interview"] as const;
+
+// Where each agent looks for skills. codex and pi share one root on purpose —
+// neither has automated MCP wiring, but both read ~/.agents/skills.
+// The credential already wired into an agent's config (D28, ruled C).
+//
+// Re-writing an MCP entry needs the plaintext token, and the plaintext only
+// exists at mint time — tokens are stored hashed (invariant 7). That used to
+// mean the only way to refresh a stale entry shape was `--force`, which
+// revokes and re-mints every agent's credential on every update. But the
+// plaintext is already in the file we are about to rewrite, so read it back
+// and reuse it: nothing new is stored, nothing is printed, and the entry gets
+// the current shape without costing anyone their session.
+//
+// Returns null when there is no entry to read — a first install, or a config
+// this never wired.
+function readWiredToken(agent: Agent): string | null {
+  try {
+    if (agent === "opencode") {
+      const path = opencodeConfigPath(join(configHome(), "opencode"));
+      if (!existsSync(path)) {
+        return null;
+      }
+      const config = parse(readFileSync(path, "utf8"), [], {
+        allowTrailingComma: true,
+      }) as Record<string, unknown> | undefined;
+      const mcp = config?.mcp as Record<string, unknown> | undefined;
+      const servers = mcp?.servers as Record<string, unknown> | undefined;
+      // the D24 native shape first, then the pre-D24 legacy one
+      for (const entry of [servers?.board, mcp?.board]) {
+        const env = (entry as { environment?: Record<string, unknown> })
+          ?.environment;
+        const token = env?.BOARD_MCP_TOKEN;
+        if (typeof token === "string" && token.length > 0) {
+          return token;
+        }
+      }
+      return null;
+    }
+    if (agent === "claude") {
+      const path = join(homeDir(), ".claude.json");
+      if (!existsSync(path)) {
+        return null;
+      }
+      const config = JSON.parse(readFileSync(path, "utf8")) as {
+        mcpServers?: Record<string, { env?: Record<string, unknown> }>;
+      };
+      const token = config.mcpServers?.board?.env?.BOARD_MCP_TOKEN;
+      return typeof token === "string" && token.length > 0 ? token : null;
+    }
+    // codex and pi are paste-a-snippet only — nothing of ours to read back
+    return null;
+  } catch {
+    // an unreadable or malformed config is not a failure here: the caller
+    // falls back to telling the human to re-mint
+    return null;
+  }
+}
+
+function agentSkillsRoot(agent: Agent): string {
+  switch (agent) {
+    case "opencode":
+      return join(configHome(), "opencode", "skills");
+    case "claude":
+      return join(homeDir(), ".claude", "skills");
+    case "codex":
+    case "pi":
+      return join(homeDir(), ".agents", "skills");
+  }
+}
+
+function repoSkillPath(name: string): string {
+  return join(import.meta.dir, "..", "..", "..", "skills", name, "SKILL.md");
+}
 
 function configHome(): string {
   const xdg = process.env.XDG_CONFIG_HOME;
@@ -167,18 +236,50 @@ function homeDir(): string {
   return homedir();
 }
 
-function copySkill(dest: string, io: CommandIo): boolean {
-  try {
-    mkdirSync(dirname(dest), { recursive: true });
-    copyFileSync(REPO_SKILL, dest);
-    io.stdout(`skill: ${dest}`);
-    return true;
-  } catch (err) {
-    io.stderr(
-      `board: could not copy the board skill to ${dest} (${err instanceof Error ? err.message : String(err)}); copy ${REPO_SKILL} there manually`,
-    );
-    return false;
+// Copies every shipped skill into one agent's skills root (the directory that
+// holds <name>/SKILL.md). Returns false if any copy failed — the caller turns
+// that into a non-zero exit.
+function copySkills(skillsRoot: string, io: CommandIo): boolean {
+  let ok = true;
+  for (const name of SKILL_NAMES) {
+    const src = repoSkillPath(name);
+    const dest = join(skillsRoot, name, "SKILL.md");
+    try {
+      mkdirSync(dirname(dest), { recursive: true });
+      copyFileSync(src, dest);
+      io.stdout(`skill: ${dest}`);
+    } catch (err) {
+      ok = false;
+      reportSkillCopyFailure(src, dest, err, io);
+    }
   }
+  return ok;
+}
+
+// A read-only skills directory means a container: agentbox and friends mount the
+// HOST's ~/.claude/skills read-only, so nothing inside the box can write there —
+// and "copy it manually" is advice the human cannot follow either (D25). Name the
+// real fix instead: install from the host, which every box then inherits.
+export function reportSkillCopyFailure(
+  src: string,
+  dest: string,
+  err: unknown,
+  io: CommandIo,
+): void {
+  const message = err instanceof Error ? err.message : String(err);
+  if (message.includes("EROFS")) {
+    io.stderr(
+      `board: ${dest} is on a read-only filesystem — you are running inside a container.\n` +
+        `  Agent sandboxes mount the host's skills directory read-only, so no in-container\n` +
+        `  install can write there, manually or otherwise.\n` +
+        `  Fix: run \`make install\` on your HOST machine. Every container you start\n` +
+        `  afterwards inherits the skill through that same mount.`,
+    );
+    return;
+  }
+  io.stderr(
+    `board: could not copy ${src} to ${dest} (${message}); copy it there manually`,
+  );
 }
 
 export class OpencodeConfigError extends Error {
@@ -267,13 +368,6 @@ export function opencodeConfigPath(dir: string): string {
 
 function wireOpencode(token: string, io: CommandIo): boolean {
   const configPath = opencodeConfigPath(join(configHome(), "opencode"));
-  const skillDest = join(
-    configHome(),
-    "opencode",
-    "skills",
-    "board",
-    "SKILL.md",
-  );
   const entry: BoardMcpEntry = {
     type: "local",
     command: [MCP_CONNECTOR_COMMAND, MCP_CONNECTOR_PATH],
@@ -332,7 +426,7 @@ function wireOpencode(token: string, io: CommandIo): boolean {
       io.stderr(`  (${manualTokenNote("opencode")})`);
     }
   }
-  return copySkill(skillDest, io) && ok;
+  return ok;
 }
 
 function printClaudeManual(io: CommandIo): void {
@@ -357,6 +451,13 @@ function wireClaude(
 ): boolean {
   let ok = true;
   if (claudeOnPath()) {
+    // Remove first, ALWAYS. `claude mcp add` on a name that already exists
+    // prints "MCP server board already exists in user config" and exits 0 —
+    // a silent no-op that we then reported as "wired" (measured against claude
+    // 2.1.282). With --force that was actively harmful: the old token had just
+    // been revoked, the new one never reached the config, and every board tool
+    // call 401'd until someone hand-edited ~/.claude.json. `remove` on a name
+    // that is not there is harmless, so this is unconditional.
     // Stdio form (D22): the real `claude mcp add` syntax — name, then
     // `--env KEY=value`, then `--` and the connector command (transport
     // defaults to stdio). Verified against `claude mcp add --help`.
@@ -373,6 +474,9 @@ function wireClaude(
       MCP_CONNECTOR_PATH,
     ];
     try {
+      // Inside the try so a read-only config surfaces as the container case
+      // rather than an unhandled throw.
+      runClaude(["mcp", "remove", "--scope", "user", "board"]);
       if (runClaude(args) === 0) {
         io.stdout("wired: claude mcp (user scope)");
       } else {
@@ -402,10 +506,7 @@ function wireClaude(
     // Guidance, not a failure: a machine without claude installed is fine.
     printClaudeManual(io);
   }
-  return (
-    copySkill(join(homeDir(), ".claude", "skills", "board", "SKILL.md"), io) &&
-    ok
-  );
+  return ok;
 }
 
 function wireTomlAgent(agent: Agent, io: CommandIo): boolean {
@@ -423,10 +524,7 @@ function wireTomlAgent(agent: Agent, io: CommandIo): boolean {
   io.stdout(`  args = ["${MCP_CONNECTOR_PATH}"]`);
   io.stdout(`  env = { "BOARD_MCP_TOKEN" = "<board-${agent}-token>" }`);
   io.stdout(`  (${manualTokenNote(agent)})`);
-  return copySkill(
-    join(homeDir(), ".agents", "skills", "board", "SKILL.md"),
-    io,
-  );
+  return true;
 }
 
 function wireAgent(
@@ -470,7 +568,8 @@ function mintToken(
       // the exact runnable commands — `make install --force` does NOT work
       // (GNU make eats dash-flags as its own options).
       io.stdout(
-        `already installed for ${agent} — re-mint with: make install FLAGS=--force (or: bun run cli/src/main.ts install --force)`,
+        `already installed for ${agent} — skills refreshed above; the credential and MCP entry are unchanged. ` +
+          `Re-mint both with: make install FLAGS=--force (or: bun run cli/src/main.ts install --force)`,
       );
       return null;
     }
@@ -504,18 +603,43 @@ export function runInstallCommand({
   const failed: Agent[] = [];
   for (const agent of agents) {
     io.stdout(`== ${agent} ==`);
+    // Skills are copied on EVERY run, for every agent, before anything else
+    // (D26). Copying a file and rotating a credential are unrelated
+    // operations, and this loop used to make the first hostage to the second:
+    // mintToken returns null for an agent that already has a token, the loop
+    // skipped to the next agent, and `make install` silently shipped no skill
+    // update at all. Pulling a new skill version should not cost every agent
+    // its credential and a session restart.
+    let ok = copySkills(agentSkillsRoot(agent), io);
     const token = mintToken(db, agent, force, io);
-    if (token === null) {
-      continue;
+    if (token !== null) {
+      // Print-once discipline (invariant 8): the token is stored hashed, so
+      // this is the only time the plaintext exists after the mint — if the
+      // agent config is lost, the fix is a --force re-mint, not a re-show.
+      io.stdout(
+        `token for "${token.name}" (store it now — it is stored hashed and cannot be shown again):`,
+      );
+      io.stdout(token.token);
+      ok = wireAgent(agent, token.token, io, claudeOnPath, runClaude) && ok;
+    } else {
+      // Nothing minted, so this agent already has a live credential. Rewrite
+      // its MCP entry around the token already in its config (D28) — that is
+      // how a shape change like D24 reaches an existing install without
+      // rotating anything. Never printed: it is the same secret, already at
+      // rest where we found it.
+      const wired = readWiredToken(agent);
+      if (wired !== null) {
+        ok = wireAgent(agent, wired, io, claudeOnPath, runClaude) && ok;
+        io.stdout(
+          `re-wired ${agent} with its existing credential — not rotated, no session restart needed`,
+        );
+      } else if (agent === "opencode" || agent === "claude") {
+        io.stdout(
+          `no board credential found in ${agent}'s config — re-mint with: make install FLAGS=--force`,
+        );
+      }
     }
-    // Print-once discipline (invariant 8): the token is stored hashed, so
-    // this is the only time the plaintext exists after the mint — if the
-    // agent config is lost, the fix is a --force re-mint, not a re-show.
-    io.stdout(
-      `token for "${token.name}" (store it now — it is stored hashed and cannot be shown again):`,
-    );
-    io.stdout(token.token);
-    if (!wireAgent(agent, token.token, io, claudeOnPath, runClaude)) {
+    if (!ok) {
       failed.push(agent);
     }
   }

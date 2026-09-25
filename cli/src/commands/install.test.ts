@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type ParseError, parse } from "jsonc-parser";
 import { openDb } from "../../../server/src/db.ts";
+import { createToken } from "../../../server/src/tokens.ts";
 import {
   INSTALL_USAGE,
   MCP_CONNECTOR_COMMAND,
@@ -21,6 +22,7 @@ import {
   mergeOpencodeConfig,
   OpencodeConfigError,
   opencodeConfigPath,
+  reportSkillCopyFailure,
   runInstallCommand,
 } from "./install.ts";
 import type { CommandIo } from "./token.ts";
@@ -111,6 +113,11 @@ function withIsolatedEnv(
     }
   }
 }
+
+// The skills `install` ships. Kept here rather than imported so a skill added
+// to install.ts without a test update fails loudly instead of silently.
+const SKILL_NAMES_UNDER_TEST = ["board", "interview"] as const;
+const SKILL_COUNT = SKILL_NAMES_UNDER_TEST.length;
 
 const HEALTHY = () => true;
 const NO_CLAUDE = () => false;
@@ -438,9 +445,15 @@ describe("board install tokens", () => {
         }),
       ).toBe(0);
       expect(second.out.join("\n")).toContain(
-        "already installed for opencode — re-mint with: make install FLAGS=--force (or: bun run cli/src/main.ts install --force)",
+        "already installed for opencode — skills refreshed above; the credential and MCP entry are unchanged.",
       );
       expect(tokenLines(second.out)).toEqual([]);
+      // D26: the skills still ship on a re-run. They used to be skipped with
+      // the mint, so the only way to update a skill was to rotate every
+      // agent's credential — copying a file is not a credential operation.
+      expect(
+        second.out.filter((line) => line.startsWith("skill: ")),
+      ).toHaveLength(SKILL_COUNT);
       rows = db
         .prepare("SELECT * FROM tokens WHERE name = ?")
         .all("board-opencode");
@@ -525,7 +538,7 @@ describe("board install tokens", () => {
 });
 
 describe("board install wiring", () => {
-  test("copies the skill into opencode, claude, and ~/.agents skill dirs", () => {
+  test("copies every shipped skill into opencode, claude, and ~/.agents skill dirs", () => {
     withIsolatedEnv(({ home, xdg }) => {
       const db = freshDb();
       const { out, io } = capture();
@@ -537,19 +550,173 @@ describe("board install wiring", () => {
         claudeOnPath: NO_CLAUDE,
       });
       expect(code).toBe(0);
-      const expected = readFileSync(
-        join(import.meta.dir, "..", "..", "..", "skills", "board", "SKILL.md"),
-        "utf8",
-      );
-      for (const dest of [
-        join(xdg, "opencode", "skills", "board", "SKILL.md"),
-        join(home, ".claude", "skills", "board", "SKILL.md"),
-        join(home, ".agents", "skills", "board", "SKILL.md"),
-      ]) {
-        expect(readFileSync(dest, "utf8")).toBe(expected);
+      // D25: board ships two skills — the review loop and the scoping method
+      // that drives it. Both land in every agent's skills root.
+      for (const name of SKILL_NAMES_UNDER_TEST) {
+        const expected = readFileSync(
+          join(import.meta.dir, "..", "..", "..", "skills", name, "SKILL.md"),
+          "utf8",
+        );
+        for (const root of [
+          join(xdg, "opencode", "skills"),
+          join(home, ".claude", "skills"),
+          join(home, ".agents", "skills"),
+        ]) {
+          expect(readFileSync(join(root, name, "SKILL.md"), "utf8")).toBe(
+            expected,
+          );
+        }
       }
-      // one skill copy per wired agent (codex + pi share ~/.agents/skills)
-      expect(out.filter((line) => line.startsWith("skill: "))).toHaveLength(4);
+      expect(out.filter((line) => line.startsWith("skill: "))).toHaveLength(
+        SKILL_COUNT * 4,
+      );
+      db.close();
+    });
+  });
+
+  // D25: a read-only skills dir means a container — agent sandboxes mount the
+  // host's skills dir read-only. "Copy it there manually" is advice the human
+  // cannot follow either, so the EROFS branch names the real fix instead.
+  test("EROFS names the container fix; other errors keep the manual advice", () => {
+    const rofs = capture();
+    reportSkillCopyFailure(
+      "/repo/skills/board/SKILL.md",
+      "/home/node/.claude/skills/board/SKILL.md",
+      new Error(
+        "EROFS: read-only file system, mkdir '/home/node/.claude/skills/board'",
+      ),
+      rofs.io,
+    );
+    const text = rofs.err.join("\n");
+    expect(text).toContain("read-only filesystem");
+    expect(text).toContain("you are running inside a container");
+    expect(text).toContain("run `make install` on your HOST machine");
+    expect(text).not.toContain("copy it there manually");
+
+    // a plain permissions error IS fixable by hand — keep the old advice
+    const other = capture();
+    reportSkillCopyFailure(
+      "/repo/skills/interview/SKILL.md",
+      "/somewhere/interview/SKILL.md",
+      new Error("EACCES: permission denied"),
+      other.io,
+    );
+    expect(other.err.join("\n")).toContain("copy it there manually");
+    expect(other.err.join("\n")).not.toContain("inside a container");
+  });
+
+  // D28: a re-run refreshes the MCP entry SHAPE without rotating credentials.
+  // The plaintext is unavailable after the mint (stored hashed, invariant 7) —
+  // but it is already sitting in the config we are about to rewrite, so it is
+  // read back and reused. This is what makes a shape change like D24 reach an
+  // existing install without costing every agent its session.
+  test("a re-run rewires opencode with the token already in its config", () => {
+    withIsolatedEnv(({ xdg }) => {
+      const db = freshDb();
+      const first = capture();
+      expect(
+        runInstallCommand({
+          db,
+          argv: ["--agents", "opencode"],
+          io: first.io,
+          checkHealth: HEALTHY,
+          claudeOnPath: NO_CLAUDE,
+        }),
+      ).toBe(0);
+      const minted = tokenLines(first.out)[0];
+      const configPath = join(xdg, "opencode", "opencode.jsonc");
+      const wiredToken = (): string =>
+        (
+          parse(readFileSync(configPath, "utf8"), [], {
+            allowTrailingComma: true,
+          }) as {
+            mcp: { servers: { board: { environment: Record<string, string> } } };
+          }
+        ).mcp.servers.board.environment.BOARD_MCP_TOKEN;
+      expect(wiredToken()).toBe(minted);
+
+      // corrupt the entry the way a stale shape would look, then re-run
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          mcp: {
+            servers: {
+              board: {
+                type: "local",
+                command: ["stale"],
+                environment: { BOARD_MCP_TOKEN: minted },
+              },
+            },
+          },
+        }),
+      );
+
+      const second = capture();
+      expect(
+        runInstallCommand({
+          db,
+          argv: ["--agents", "opencode"],
+          io: second.io,
+          checkHealth: HEALTHY,
+          claudeOnPath: NO_CLAUDE,
+        }),
+      ).toBe(0);
+      // nothing minted, nothing printed, same credential still wired
+      expect(tokenLines(second.out)).toEqual([]);
+      expect(wiredToken()).toBe(minted);
+      expect(second.out.join("\n")).toContain(
+        "re-wired opencode with its existing credential",
+      );
+      // ...and the entry shape is current again, not the stale one
+      const entry = (
+        parse(readFileSync(configPath, "utf8"), [], {
+          allowTrailingComma: true,
+        }) as {
+          mcp: {
+            servers: {
+              board: { command: string[]; timeout: { catalog: number } };
+            };
+          };
+        }
+      ).mcp.servers.board;
+      expect(entry.command).not.toEqual(["stale"]);
+      expect(entry.timeout.catalog).toBe(60000);
+      db.close();
+    });
+  });
+
+  test("a re-run reads claude's wired token back out of ~/.claude.json", () => {
+    withIsolatedEnv(({ home }) => {
+      const db = freshDb();
+      const existing = "tok-already-wired";
+      writeFileSync(
+        join(home, ".claude.json"),
+        JSON.stringify({
+          mcpServers: { board: { env: { BOARD_MCP_TOKEN: existing } } },
+        }),
+      );
+      // an agent that already holds a credential: mintToken returns null
+      createToken(db, { name: "board-claude" });
+
+      const { out, io } = capture();
+      const calls: string[][] = [];
+      expect(
+        runInstallCommand({
+          db,
+          argv: ["--agents", "claude"],
+          io,
+          checkHealth: HEALTHY,
+          claudeOnPath: () => true,
+          runClaude: (args) => {
+            calls.push(args);
+            return 0;
+          },
+        }),
+      ).toBe(0);
+      expect(tokenLines(out)).toEqual([]);
+      expect(calls[1]).toContain(`BOARD_MCP_TOKEN=${existing}`);
+      // the secret is reused, never echoed
+      expect(out.join("\n")).not.toContain(existing);
       db.close();
     });
   });
@@ -571,11 +738,16 @@ describe("board install wiring", () => {
         },
       });
       expect(code).toBe(0);
-      expect(calls).toHaveLength(1);
+      // D28: remove ALWAYS precedes add. `claude mcp add` on an existing name
+      // prints "already exists" and exits 0 — a silent no-op we reported as
+      // success, which under --force left the freshly revoked token in the
+      // config (measured against claude 2.1.282).
+      expect(calls).toHaveLength(2);
+      expect(calls[0]).toEqual(["mcp", "remove", "--scope", "user", "board"]);
       // Stdio form (D22), verified against `claude mcp add --help`: name, then
       // --env KEY=value, then `--` and the connector command (transport
       // defaults to stdio; no --transport/--header/--url needed).
-      expect(calls[0]).toEqual([
+      expect(calls[1]).toEqual([
         "mcp",
         "add",
         "--scope",

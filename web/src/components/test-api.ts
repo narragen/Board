@@ -216,6 +216,9 @@ function htmlDoc(heading: string, style: string): string {
     '<section data-ba="s-header" data-ba-label="Header">',
     `<h1>${heading}</h1></section>`,
     "<p>unlabeled tail</p>",
+    // D26: html boards render mermaid too — the block sits AFTER the external
+    // script so the test proves rendering waits for the mount to resolve
+    '<pre class="mermaid" data-ba="b-diagram">graph TD; A--&gt;B;</pre>',
     '<script src="/libs/chart-4.4.9.umd.min.js"></script>',
     "<script>window.__dashMounted = true;</script>",
     "</body></html>",

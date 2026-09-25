@@ -1,0 +1,236 @@
+<!doctype html>
+<!--
+  interview round — see skills/interview/SKILL.md
+
+  Two things to fill in: the heading and intro text in the body, and the
+  QUESTIONS array in the CONFIG block. Everything else renders itself.
+
+  STYLING IS ALREADY DONE, twice over.
+
+  1. The wrapper is <div class="board-ui">, which the board app styles with
+     its own theme tokens — dark mode included. Write semantic HTML inside it
+     (fieldset, legend, label, button) and it looks right.
+  2. Tailwind is loaded above, vendored and pinned. Use utilities freely for
+     layout and spacing.
+
+  ONE RULE if you reach for Tailwind: take colors from Board's tokens, never
+  from Tailwind's palette. Tailwind assumes a white page; Board runs
+  color-scheme: light dark, so `bg-white text-gray-900` is a white card on a
+  near-black app for half your readers. Write it this way instead:
+
+      class="rounded-lg p-4 bg-[var(--bg-subtle)] text-[var(--fg)]"
+
+  Layout, spacing and type utilities need none of this — it is only color.
+  If Tailwind fails to load, .board-ui still carries the page; the round stays
+  readable and submittable, just plainer.
+
+  Adding your own <style> is fine for anything neither covers. Scope every
+  rule to your own wrapper id: an html board mounts into the host page with no
+  iframe (D18), so a bare `body`, `h1` or `:root` rule restyles the whole
+  board app.
+
+  The six question types, and the answer each one sends back:
+
+    pick_one    needs options            ->  "B"
+    pick_many   needs options            ->  ["A", "C"]
+    confirm     options optional, and    ->  true | false
+                their keys must be
+                "yes" and "no"
+    rank        needs options            ->  ["C", "A", "B"]
+    ask_text                             ->  "free text"
+    ask_image                            ->  {asset_id, filename}
+
+  Every question also gets a visible note field. The note is where the human
+  tells you the option list itself was wrong, which is the most useful answer
+  they can give you, so it is never hidden behind a disclosure triangle.
+
+  Answers arrive as ONE board comment carrying JSON keyed by question id. The
+  fetch that sends it lives HERE and nowhere else — do not hand-roll it in a
+  board. When the narrow answer channel lands (NAR-1862), this is the only
+  file that changes instead of every board any agent ever published.
+
+  Submit is always enabled. A greyed-out button reads as a broken page
+  (dogfooded: "I don't see a way to submit"), and a note with no choice is a
+  real answer.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Interview round</title>
+<script src="/libs/tailwind-4.3.3.browser.js"></script>
+</head>
+<body>
+<div class="board-ui">
+  <!-- Edit this heading, the line under it, and the "already settled" list as
+       plain HTML. Only the questions need the schema below. Delete the settled
+       block in round 1; fill it in from round 2 on so nothing gets silently
+       re-litigated. -->
+  <h1>Round 1 &mdash; what we are deciding</h1>
+  <p>Three decisions. Each one carries my recommendation. Click, add a note if I
+    am wrong, then submit once at the bottom.</p>
+  <div class="settled">
+    <b>Already settled &mdash; not re-litigating these:</b>
+    <ul>
+      <li><b>Auth:</b> the prototype path, for now.</li>
+    </ul>
+  </div>
+  <form id="round">
+    <div class="bar flex flex-wrap items-center gap-4">
+      <p class="flex-1 min-w-[18rem] m-0">One button sends <b>everything on this page at
+        once</b> — every choice and every note, as a single comment. Nothing is sent
+        until you press it.</p>
+      <button type="submit">Submit answers</button>
+    </div>
+  </form>
+  <p id="out" class="why">Nothing submitted yet.</p>
+</div>
+
+<script>
+// Everything lives inside this IIFE. A board's inline script shares one global
+// scope with every other board opened in the same browser session, so a
+// top-level `const BOARD_ID` throws "already been declared" on the SECOND
+// interview board you open — and a script that throws never runs, so that
+// board renders no questions at all. Dogfooded exactly that way.
+(() => {
+// ------------------------------------------------------------------- CONFIG
+const BOARD_ID  = "BOARD_ID_HERE";   // the board you publish this round to
+const VERSION_N = 1;                 // the version number this round becomes
+const ROUND     = 1;                 // keep question numbering running across rounds
+const QUESTIONS = [
+  {
+    id: "example", n: "Q1", type: "pick_one",
+    title: "Replace this with a real question",
+    body:  "The context a human needs in order to answer it. Plain HTML.",
+    rec:   "A",
+    why:   "Why you recommend A.",
+    options: [
+      { k: "A", label: "First option",  why: "What choosing it costs you." },
+      { k: "B", label: "Second option", why: "What choosing it costs you." },
+    ],
+  },
+];
+// ------------------------------------------------------------------ /CONFIG
+
+const form = document.getElementById("round");
+const out = document.getElementById("out");
+const button = form.querySelector("button[type=submit]");
+
+// One row per option, as a label wrapping a native control: the app's CSS
+// gives it the selected state via :has(), so there is no click handler and no
+// aria bookkeeping to keep in sync.
+const choices = (q, options, showKey) =>
+  options.map((o) =>
+    `<label><input type="${q.type === "pick_many" ? "checkbox" : "radio"}" name="${q.id}" value="${o.k}">`
+    + (showKey ? `<b>${o.k}</b> ` : "") + o.label
+    + (o.why ? `<span class="why">${o.why}</span>` : "") + "</label>").join("");
+
+function control(q) {
+  if (q.type === "pick_one" || q.type === "pick_many") return choices(q, q.options, true);
+  // A confirm may supply its own two options with consequence lines; plain
+  // Yes/No is only the fallback when it does not.
+  if (q.type === "confirm") {
+    return choices(q, q.options || [{ k: "yes", label: "Yes" }, { k: "no", label: "No" }], false);
+  }
+  if (q.type === "rank") {
+    const order = Array.isArray(q.rec) ? q.rec : q.options.map((o) => o.k);
+    return q.options.map((o) => `<div class="why"><b>${o.k}</b> ${o.label}</div>`).join("")
+      + '<p class="why">Best first, comma separated — pre-filled with my recommendation.</p>'
+      + `<input type="text" name="${q.id}" value="${order.join(", ")}">`;
+  }
+  if (q.type === "ask_text") return `<textarea name="${q.id}" rows="3" placeholder="Your answer"></textarea>`;
+  if (q.type === "ask_image") {
+    return `<input type="file" name="${q.id}" accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml">`;
+  }
+  return `<p class="bad">This board asked for an unknown question type: ${q.type}</p>`;
+}
+
+form.insertAdjacentHTML("afterbegin", QUESTIONS.map((q) => `
+  <fieldset>
+    <legend>${q.n} · ${q.title}</legend>
+    <div class="mb-2">${q.body}</div>
+    <p class="rec"><b>Recommended: ${Array.isArray(q.rec) ? q.rec.join(", ") : q.rec}.</b> ${q.why || ""}</p>
+    ${control(q)}
+    <label class="note">Note — optional, and the most useful thing you can tell me is that the options themselves are wrong.
+      <textarea name="${q.id}::note" rows="2"></textarea>
+    </label>
+  </fieldset>`).join(""));
+
+const text = (v) => (typeof v === "string" && v.trim() ? v.trim() : null);
+
+// The human's own browser session, so the comment is attributed to them and
+// not to an agent token. Absent in a private window or with site data cleared.
+function session() {
+  try {
+    return localStorage.getItem("board.session");
+  } catch {
+    return null;
+  }
+}
+
+async function upload(file) {
+  const res = await fetch(`/api/assets?board_id=${encodeURIComponent(BOARD_ID)}`, {
+    method: "POST",
+    headers: { "content-type": file.type, authorization: `Bearer ${session()}` },
+    body: await file.arrayBuffer(),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json?.error?.message || `asset upload: HTTP ${res.status}`);
+  return { asset_id: json.id || json.asset_id, filename: file.name };
+}
+
+async function answerTo(q, fd) {
+  if (q.type === "pick_many") {
+    const picked = fd.getAll(q.id).filter(Boolean);
+    return picked.length ? picked : null;
+  }
+  if (q.type === "confirm") {
+    const v = fd.get(q.id);
+    return v === null ? null : v === "yes";
+  }
+  if (q.type === "rank") {
+    const order = (text(fd.get(q.id)) || "").split(",").map((s) => s.trim()).filter(Boolean);
+    return order.length ? order : null;
+  }
+  if (q.type === "ask_image") {
+    const file = fd.get(q.id);
+    return file?.size ? await upload(file) : null;
+  }
+  return text(fd.get(q.id));
+}
+
+// Whether the human agreed with a recommendation is NOT computed here: you
+// know what you recommended, so you can compare. Doing it in the browser only
+// added a way to report a wrong "you were overruled", which is worse than none.
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const fd = new FormData(form);
+  out.className = "why";
+  out.textContent = "submitting…";
+  button.disabled = true;
+  try {
+    const answers = {};
+    for (const q of QUESTIONS) {
+      answers[q.id] = { chose: await answerTo(q, fd), note: text(fd.get(`${q.id}::note`)) };
+    }
+    const res = await fetch(`/api/boards/${BOARD_ID}/comments`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${session()}` },
+      body: JSON.stringify({
+        anchor: { type: "board" },
+        body: `## Round ${ROUND} answers\n\n\`\`\`json\n${JSON.stringify({ round: ROUND, answers }, null, 2)}\n\`\`\``,
+        version_n: VERSION_N,
+      }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status} — ${(await res.text()).slice(0, 200)}`);
+    out.className = "ok";
+    out.textContent = "Submitted. Nothing else to press.";
+  } catch (err) {
+    out.className = "bad";
+    out.textContent = `${err}\n\nNot recorded — reply in a normal board comment instead.`;
+    button.disabled = false;
+  }
+});
+})();
+</script>
+</body>
+</html>

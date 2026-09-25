@@ -22,6 +22,7 @@ import {
 import { mountBoardDocument } from "../board-mount.ts";
 import { formatDate } from "../format.ts";
 import { assetIdFromSrc } from "../image.ts";
+import { renderMermaidBlocks } from "../mermaid.ts";
 import { BoardStream } from "../sse.ts";
 import { CommentSidebar } from "./CommentSidebar.tsx";
 import { ImageLightbox } from "./ImageLightbox.tsx";
@@ -135,30 +136,21 @@ export function BoardView({ id }: { id: string }) {
     };
   }, [id, selected]);
 
+  // Markdown boards: content is committed by React's render, so the blocks
+  // are there as soon as this runs. The html case is chained onto the mount
+  // below instead, because that content arrives asynchronously.
   useEffect(() => {
-    if (version === null || data === null || data.board.format === "html") {
-      return;
-    }
-    // mermaid renders client-side in the host chrome (D12)
-    const nodes = Array.from(
-      containerRef.current?.querySelectorAll("pre.mermaid") ?? [],
-    ) as HTMLElement[];
-    if (nodes.length === 0) {
+    const root = containerRef.current;
+    if (
+      version === null ||
+      data === null ||
+      root === null ||
+      data.board.format === "html"
+    ) {
       return;
     }
     let cancelled = false;
-    void (async () => {
-      try {
-        const mermaid = (await import("mermaid")).default;
-        mermaid.initialize({ securityLevel: "strict", startOnLoad: false });
-        if (cancelled) {
-          return;
-        }
-        await mermaid.run({ nodes });
-      } catch {
-        // a bad diagram degrades to its source text — never breaks the page
-      }
-    })();
+    void renderMermaidBlocks(root, () => cancelled);
     return () => {
       cancelled = true;
     };
@@ -181,7 +173,19 @@ export function BoardView({ id }: { id: string }) {
     ) {
       return;
     }
-    void mountBoardDocument(version.content, root);
+    let cancelled = false;
+    // Diagrams render only once the mount resolves (D26): the body children
+    // land before the first await, but an agent script may also emit a block,
+    // and chaining is the only ordering that holds in both cases.
+    void mountBoardDocument(version.content, root).then(() => {
+      if (cancelled) {
+        return;
+      }
+      return renderMermaidBlocks(root, () => cancelled);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [version, data]);
 
   // Board images (markdown embeds and agent html alike) get wrapped so

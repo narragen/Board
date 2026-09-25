@@ -114,12 +114,9 @@ Keep sessions task-scoped: when the review is done, `board down` — do not leav
 
 A collaboration board is a session instance whose task runs for days, not minutes (D23 D2) — the same machinery on a longer leash, nothing new to spawn. On top of the session loop:
 
-- **Per-agent tokens for attribution** — each agent mints its own (`board token add <name> --instance <id>`) so every comment, reply, and resolve reads as its author.
-- **Addressing a specific agent** — `@<handle>` in any comment body directs that comment's attention (never private — every cursor sees every comment); `GET /api/boards/:id/subscribers` is who's here (presence upserts on every poll), and comment threads show who has acted.
-- **Per-agent comment cursors** — the `since` cursor is client-held (D15); each consumer persists its own per board. Sharing one cursor means missing each other's threads.
-- **Presence via polls, push as the alternative** — every cursor poll refreshes the agent's `subscriber` row (`GET /api/boards/:id/subscribers` lists who is reading); `board_subscribe` replaces polling for an agent that can receive a webhook.
+- **Tokens, cursors, addressing, and presence** work exactly as in *Collaborating on a shared board* above — nothing new here. One addition: over a long run, comment threads are also a record of who has acted.
 - **Durability (D3 — ratified 2026-09-22)** — spawn with `BOARD_DATA_DIR` on a persistent volume: the instance registry and its keepsake zips then survive environment resets (the daemon's own data dir stays OS-temp per D20). Export milestone keepsakes mid-flight (`board export --instance <id> <board_id>`), not only at `down`; recovery is import from the keepsakes (`make import`, or `board up --resume=latest`).
-- **MANDATORY — takeaways land at \<repo path\>** (D6): every collaboration loop carries an explicit line naming where its durable outcomes go, and writes them there before the cycle closes. The board stays served only as long as the exchange needs it; the record lives off-board.
+- **MANDATORY — takeaways land at \<repo path\>** (D6): every collaboration loop carries an explicit line naming where its durable outcomes go, and writes them there before the cycle closes. Keep the board served only as long as the exchange needs it.
 
 ## Tool reference
 
@@ -231,8 +228,109 @@ board open <board_id>                      # mint the one-time human link
 - **Restart-across-sessions runbook**: health-check first; if down, start detached again with the same `BOARD_DATA_DIR` — boards, tokens, and threads are exactly where you left them. This is the recovery the rule above points at when the daemon is *yours*, not the human's.
 - **Only the fixed port is browsable** (published-port form): session instances stay structurally loopback + kernel-random port (D20 boundary), so a human-browsable collaboration board lives on this server, not on an instance. Deployment details and the Docker Desktop caveat: `docs/deployment.md`, "Single-container agent box".
 
-## Style
+## Write it for a human who just switched gears
 
-- Boards are markdown: headings, tables, and mermaid diagrams render in the UI.
-- One topic per board — split unrelated work into separate boards.
-- Label versions: lead with a line like `v2 — trimmed rollout section per feedback` so the human sees what changed and why.
+The person reading your board has been doing something else. They do not remember the ticket, the incident, or the words you have been living in for the last hour. Write for them, not for the version of yourself that just did the work.
+
+- **Plain language before internal language.** Say what the thing is in terms of what the product does, then introduce your terms. Define anything they cannot be assumed to know in-line, the first time it carries weight.
+- **No agent jargon.** "The frontier is empty so I'm exiting the loop" means nothing to them. "Nothing left to decide — here's what we agreed" does.
+- **Number anything sequential** — what a request touches, where a failure lands, what you plan to do — and mark the step that matters.
+- **Separate measured from estimated**, every time, and never assert a date, count, or version you have not checked. One invented number discredits the real ones beside it.
+- **One topic per board.** Split unrelated work into separate boards.
+- **Label every version.** Lead with a line like `v2 — trimmed the rollout section per your comment` so the human sees what changed and why without diffing.
+
+## Reach for a picture
+
+Prose is the worst format for most of what goes on a board. If following your paragraph means building a picture in their head, draw the picture instead. What renders where, measured:
+
+| You want | Board format | How |
+|---|---|---|
+| A diagram — before/after, who-owns-what, where a value flows | either | markdown: a ```` ```mermaid ```` fence. html: write `<pre class="mermaid">…</pre>` yourself. Rendered client-side, `securityLevel: "strict"`; a bad diagram degrades to its source instead of breaking the page |
+| A table of options against criteria | either | GFM table; rows are individually comment-anchorable |
+| Math | **markdown** | `$x^2$` inline, `$$…$$` display — katex at publish time |
+| Syntax-highlighted code or pseudocode | **markdown** | a fenced block with a language tag |
+| A live chart — measured over time or category | **html** | `<script src="/libs/chart-4.4.9.umd.min.js"></script>`, vendored and pinned. Put it in `<head>`: externals are awaited in document order before your inline code runs. Then call `boardChartTheme()` — see below |
+| Questions the human clicks answers into | **html** | the `interview` skill — `skills/interview/SKILL.md` |
+| A screenshot or an image you generated | either | `board_upload_image`, then the snippet it hands back |
+
+**Charts: call `boardChartTheme()` first.** Chart.js draws in its own grey-on-white palette, which has nothing to do with Board's theme and is close to unreadable on the dark one. One call fixes it:
+
+```js
+const palette = boardChartTheme();   // also sets Chart.defaults from Board's tokens
+new Chart(canvas, {
+  type: "bar",
+  data: { labels, datasets: [{ label: "after", data, backgroundColor: palette[0] }] },
+  options: { maintainAspectRatio: false },   // then give the canvas a parent with a height
+});
+```
+
+It throws if Chart.js has not loaded yet, which is the failure you want — the alternative is a chart that renders wrong with no clue why. And if you set `maintainAspectRatio: false`, put the canvas in a container with an explicit height, or it grows without bound (dogfooded: a 41,849px tall chart).
+
+Charts are not decoration. A number that matters across time or category is a chart; a paragraph describing that chart is a worse version of the same information. Put a `data-ba` id on a diagram or a section and it stays commentable — the human can anchor a comment to the picture itself.
+
+## html boards: the app already styles them
+
+An html board mounts into the **host document with no iframe** (D18), so it inherits the app's prose styling for free. For form chrome — questions, inputs, buttons, cards — wrap your board in `<div class="board-ui">` and it picks up the app's real theme tokens, dark mode included:
+
+```html
+<div class="board-ui">
+  <h1>Rollout options</h1>
+  <fieldset>
+    <legend>Q1 · Which region first?</legend>
+    <label><input type="radio" name="q1" value="A"> <b>A</b> us-east
+      <span class="why">Largest blast radius, fastest signal.</span></label>
+  </fieldset>
+  <div class="bar"><button type="submit">Submit</button></div>
+</div>
+```
+
+`fieldset`, `legend`, `label`, `input`, `textarea`, `select`, `button` are styled, plus `.why` (muted secondary line), `.rec` (a highlighted recommendation), `.settled` (what is already decided), `.note`, `.bar` (the action row), `.ok` / `.bad`. Selected options highlight themselves through `:has(:checked)` — no JavaScript, no aria bookkeeping. Full list in [docs/api.md](../../docs/api.md) under *Board rendering surface*.
+
+### Want Tailwind? It is vendored (D26)
+
+```html
+<script src="/libs/tailwind-4.3.3.browser.js"></script>
+```
+
+Utility classes then work as you expect them to. **One rule, and it is the whole difference between a board that looks native and one that looks pasted in:** take every color from Board's own tokens, never from Tailwind's palette. Tailwind's defaults assume a white page; Board runs `color-scheme: light dark`, so `bg-white text-gray-900` is a white card on a near-black app for any reader in dark mode.
+
+```html
+<div class="rounded-lg border p-4 bg-[var(--bg-subtle)] text-[var(--fg)] border-[var(--border-subtle)]">
+```
+
+Layout, spacing, and type utilities are free of this — it is only color. `.board-ui` and Tailwind compose fine; use both.
+
+Two measured caveats. Tailwind v4 emits its base and theme rules inside `@layer`, and unlayered CSS beats layered CSS — so Board's own styling wins and the app's chrome is untouched (verified: fonts, borders, and the content column are identical with and without it). But its generated `<style>` is injected into `<head>`, **not** into your board, so it survives navigation and stays live for every board opened afterwards in that browser session. Its `*, ::before, ::after { border: 0 solid }` reset then applies to boards that never asked for Tailwind. Nothing observed breaks, because Board sets its borders explicitly — but a board that relies on a browser default border may not look the same after someone visits a Tailwind board.
+
+## Your board's script shares one global scope
+
+Every board's inline script runs in the **same** global scope as every other board opened in that browser session. A top-level `const` or `let` therefore throws `already been declared` the second time — and a script that throws never runs, so **that board renders nothing at all**. Dogfooded exactly that way: two interview boards, the second one blank.
+
+Wrap everything you write in an IIFE:
+
+```html
+<script>
+(() => {
+  const BOARD_ID = "…";   // safe — scoped to this function
+  // …
+})();
+</script>
+```
+
+The shipped templates do this, and `skills/templates/templates.test.ts` compiles each one twice in a single context to keep them honest.
+
+**If you do add your own CSS, scope every rule to your own wrapper id.** The board shares this document with the app, so a bare element or `:root` selector restyles the app itself, silently:
+
+```html
+<style>
+  body { max-width: 760px }   /* WRONG — shrinks the whole board app */
+  :root { --bg: #fff }        /* WRONG — overrides the host's own variables */
+  #mine h1 { font-size: 2rem }  /* right — scoped to your wrapper */
+</style>
+```
+
+That exact `body` rule once cut the host's content column from 1169px to 312px, and it reads as a Board layout bug rather than a board-content bug.
+
+`skills/templates/interview-round.html` (interactive questions) and `skills/templates/dashboard.html` (charts and status) are the worked examples — start from one of them.
+
+**Interactive boards** — a human clicking answers back to you — are the `interview` skill's job, not a thing to hand-roll: `skills/interview/SKILL.md` owns the question schema, and the one file that posts answers back.

@@ -6,43 +6,36 @@
 <title>Dashboard template</title>
 <script src="/libs/chart-4.4.9.umd.min.js"></script>
 <style>
-  :root { color-scheme: light dark; }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; padding: 28px; font-family: system-ui, sans-serif; line-height: 1.55;
-    background: #ffffff; color: #1a1a1a;
+  /* The board app styles .board-ui with its own theme tokens (D26): headings,
+     buttons, labels, inputs, .why and .note are already done, dark mode
+     included. What is left below is genuinely this board's own, so it is
+     scoped to #dash — a bare `body`, `*`, `h1` or `:root` rule would restyle
+     the board app itself, which shares this document (D18, no iframe). A stray
+     `body { max-width }` here once cut the host content column to a third.
+
+     Note the var() names: the app's theme tokens are :root custom properties
+     on this same document, so your own rules can use them and stay in theme. */
+  #dash .card {
+    border: 1px solid var(--border-subtle); border-radius: 8px;
+    padding: 20px; margin: 0 0 24px;
   }
-  @media (prefers-color-scheme: dark) {
-    body { background: #0a0a0a; color: #eeeeee; }
-    .card { border-color: #1e1e1e !important; }
+  #dash canvas { max-width: 100%; }
+  #dash .tally { margin-top: 12px; font-variant-numeric: tabular-nums; }
+  #dash .tally div { margin: 2px 0; }
+  #dash .bar {
+    display: inline-block; height: 10px; border-radius: 3px;
+    background: var(--info); vertical-align: middle; margin-left: 8px;
   }
-  .card {
-    border: 1px solid #dcdcdc; border-radius: 8px; padding: 20px; margin: 0 0 24px;
-    max-width: 760px;
-  }
-  h1 { font-size: 1.45rem; margin: 0 0 4px; }
-  h2 { font-size: 1.05rem; margin: 0 0 12px; color: #9d7cd8; }
-  .sub { color: #6b6b6b; font-size: 0.9rem; margin: 0 0 8px; }
-  canvas { max-width: 100%; }
-  .opts { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
-  .opt { display: flex; gap: 8px; align-items: center; }
-  button {
-    font: inherit; padding: 6px 16px; border-radius: 6px; cursor: pointer;
-    border: 1px solid #3b7dd8; background: #3b7dd8; color: #ffffff;
-  }
-  @media (prefers-color-scheme: dark) { button { border-color: #fab283; background: #fab283; color: #0a0a0a; } }
-  .tally { margin-top: 12px; font-variant-numeric: tabular-nums; }
-  .tally div { margin: 2px 0; }
-  .bar { display: inline-block; height: 10px; border-radius: 3px; background: #5c9cf5; vertical-align: middle; margin-left: 8px; }
-  .note { font-size: 0.85rem; color: #6b6b6b; margin-top: 12px; }
 </style>
 </head>
 <body>
 
+<div id="dash" class="board-ui">
+
 <section data-ba="s-header" data-ba-label="Header">
   <div class="card">
     <h1>Dashboard template</h1>
-    <p class="sub">The M4 acceptance artifact: charts + a form + anchored sections, rendering in the host app. Agents copy this file as a starting point.</p>
+    <p class="why">Charts, a form, and anchored sections rendering in the host app. Copy this file as a starting point; the app supplies the styling through <code>class="board-ui"</code>.</p>
   </div>
 </section>
 
@@ -56,12 +49,10 @@
 <section data-ba="s-form" data-ba-label="Choices form">
   <div class="card">
     <h2>Choices form (interactive, no network)</h2>
-    <p class="sub">Template poll — which chart lib should the default template ship?</p>
-    <div class="opts">
-      <label class="opt"><input type="radio" name="lib" value="chart.js" checked> chart.js — light, canvas-simple</label>
-      <label class="opt"><input type="radio" name="lib" value="plotly"> plotly — maps + interactivity</label>
-      <label class="opt"><input type="radio" name="lib" value="both"> both vendored, boards choose</label>
-    </div>
+    <p class="why">Template poll — which chart lib should the default template ship?</p>
+    <label><input type="radio" name="lib" value="chart.js" checked> chart.js — light, canvas-simple</label>
+    <label><input type="radio" name="lib" value="plotly"> plotly — maps + interactivity</label>
+    <label><input type="radio" name="lib" value="both"> both vendored, boards choose</label>
     <button type="button" id="vote">Vote</button>
     <div class="tally" id="tally" hidden></div>
     <p class="note" id="boundary">
@@ -85,12 +76,21 @@
 </section>
 
 <script>
-  // static demo data — replace with your own
+(() => {
+  // Wrapped in an IIFE: board scripts share one global scope with every other
+  // board opened in the same browser session, so a top-level declaration
+  // collides on the second one (D27).
+  // boardChartTheme() pushes Board's theme tokens into Chart.defaults and hands
+  // back a series palette, so the chart matches the app in either colour scheme.
+  // Without it Chart.js draws grey-on-white, which is close to unreadable on the
+  // dark theme. It throws if chart.js has not loaded — deliberately loud.
+  const palette = boardChartTheme();
   new Chart(document.getElementById("loop"), {
     type: "bar",
     data: {
       labels: ["boards published", "comments", "threads resolved"],
-      datasets: [{ label: "dogfood loop so far", data: [5, 46, 31] }]
+      // static demo data — replace with your own
+      datasets: [{ label: "dogfood loop so far", data: [5, 46, 31], backgroundColor: palette[0] }]
     },
     options: { responsive: false, plugins: { legend: { display: false } } }
   });
@@ -115,6 +115,8 @@
       tally.appendChild(row);
     });
   });
+})();
 </script>
+</div>
 </body>
 </html>

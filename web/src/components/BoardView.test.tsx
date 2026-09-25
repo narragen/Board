@@ -106,6 +106,30 @@ describe("BoardView", () => {
     expect(scripts[1].text).toContain("__dashMounted");
   });
 
+  // D26: mermaid used to be skipped entirely for html boards, so a diagram on
+  // one rendered as raw source. The ordering is the whole fix — rendering is
+  // chained onto mountBoardDocument, because an effect running alongside the
+  // mount finds zero nodes and silently draws nothing.
+  test("html board renders mermaid, and only after the mount resolves", async () => {
+    const before = mermaidRunCalls.length;
+    const container = render(<BoardView id="b-html" />);
+    await act(async () => {});
+    const content = container.querySelector("div.board-content");
+    // the external script is still pending, so the mount has not resolved
+    expect(mermaidRunCalls.length - before).toBe(0);
+    const pending = [...(content?.querySelectorAll("script") ?? [])];
+    await act(async () => {
+      pending[0].dispatchEvent(new Event("load"));
+    });
+    expect(mermaidRunCalls.length - before).toBe(1);
+    const nodes = mermaidRunCalls.at(-1)?.nodes;
+    expect(nodes).toHaveLength(1);
+    expect(nodes?.[0].className).toContain("mermaid");
+    // the publish-injected anchor id survives rendering, so the diagram stays
+    // commentable
+    expect(nodes?.[0].getAttribute("data-ba")).toBe("b-diagram");
+  });
+
   test("html board inline scripts actually run in the host DOM (D18)", async () => {
     const container = render(<BoardView id="b-html" />);
     await act(async () => {});
