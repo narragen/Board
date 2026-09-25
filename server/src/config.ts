@@ -1,5 +1,6 @@
-import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { existsSync, statSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 
 class ConfigError extends Error {
   constructor(message: string) {
@@ -107,4 +108,80 @@ export function makeConfig(env: Env): Config {
 
 export function loadConfig(): Config {
   return makeConfig(process.env);
+}
+
+// D23 D3 ratified a persistent mount for the agent box's data dir
+// (BOARD_DATA_DIR=/home/node/board), and nothing ever enforced it. A box that
+// skips the mount runs perfectly on the container's own writable layer and
+// loses every board the moment the box is re-created — which is not
+// hypothetical: a data dir vanished mid-week during dogfooding, and that reset
+// is part of what D23 was written to answer.
+//
+// A warning, not a refusal. The daemon is fully functional; the exposure is
+// future data loss, and refusing to start would break every box running today
+// for a risk that has not materialised yet. Loud at startup is proportionate.
+//
+// Pure, so all three conditions are testable without a container:
+//   1. in a container at all — otherwise none of this applies and we say
+//      nothing on a normal host,
+//   2. not under the system temp dir — a data dir there is ephemeral by
+//      design (every test and `make smoke` uses one), so the warning would be
+//      true and useless,
+//   3. same device as `/` — a volume or bind mount lands on a different
+//      device, so this is what distinguishes "on a mount that survives" from
+//      "on the container's root filesystem". It is the check that makes the
+//      warning a measurement rather than a guess.
+// An unknown device (null) means we could not tell, so we stay quiet.
+export function ephemeralDataDirWarning(facts: {
+  dataDir: string;
+  inContainer: boolean;
+  dataDirDevice: number | null;
+  rootDevice: number | null;
+  tmpDir: string;
+}): string | null {
+  const { dataDir, inContainer, dataDirDevice, rootDevice, tmpDir } = facts;
+  if (!inContainer) {
+    return null;
+  }
+  if (dataDir === tmpDir || dataDir.startsWith(`${tmpDir}${sep}`)) {
+    return null;
+  }
+  if (dataDirDevice === null || rootDevice === null) {
+    return null;
+  }
+  if (dataDirDevice !== rootDevice) {
+    return null;
+  }
+  return (
+    `board: warning: the data dir (${dataDir}) is on this container's own writable layer, ` +
+    "not a mount — every board, comment and event in it disappears when the container is re-created.\n" +
+    "  Fix (D23 D3, docs/deployment.md): mount a volume and point the daemon at it —\n" +
+    "  BOARD_DATA_DIR=/home/node/board, with /home/node/board on a persistent mount."
+  );
+}
+
+// The data dir does not exist yet on a first run, so fall back to its parent:
+// the question is which filesystem the path lands on, and the parent answers
+// it just as well.
+function deviceOf(path: string): number | null {
+  for (const candidate of [path, dirname(path)]) {
+    try {
+      return statSync(candidate).dev;
+    } catch {
+      // try the parent, then give up — an unknown device warns about nothing
+    }
+  }
+  return null;
+}
+
+export function describeEphemeralDataDir(dataDir: string): string | null {
+  return ephemeralDataDirWarning({
+    dataDir,
+    // both standard markers: docker writes /.dockerenv, podman writes
+    // /run/.containerenv. Missing both is the honest "not in a container".
+    inContainer: existsSync("/.dockerenv") || existsSync("/run/.containerenv"),
+    dataDirDevice: deviceOf(dataDir),
+    rootDevice: deviceOf("/"),
+    tmpDir: tmpdir(),
+  });
 }

@@ -1,4 +1,4 @@
-import { loadConfig } from "./config.ts";
+import { describeEphemeralDataDir, loadConfig } from "./config.ts";
 import { startDaemon } from "./daemon.ts";
 
 // The readiness print is the daemon's one machine-readable contract —
@@ -12,6 +12,15 @@ export const LISTEN_LINE = /board: host app listening on (http:\S+)/;
 // which was previously a byte-for-byte copy of this file.
 export async function runDaemon(): Promise<void> {
   const config = loadConfig();
+
+  // stderr, and before the listen line: LISTEN_LINE is a machine-readable
+  // contract on stdout (cli/src/instances.ts matches it), so nothing advisory
+  // goes near that stream.
+  const ephemeral = describeEphemeralDataDir(config.dataDir);
+  if (ephemeral !== null) {
+    console.error(ephemeral);
+  }
+
   const daemon = startDaemon(config);
 
   console.log(`board: host app listening on ${daemon.hostUrl}`);

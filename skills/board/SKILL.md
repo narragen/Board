@@ -250,7 +250,7 @@ Prose is the worst format for most of what goes on a board. If following your pa
 | Math | **markdown** | `$x^2$` inline, `$$…$$` display — katex at publish time |
 | Syntax-highlighted code or pseudocode | **markdown** | a fenced block with a language tag |
 | A live chart — measured over time or category | **html** | `<script src="/libs/chart-4.4.9.umd.min.js"></script>`, vendored and pinned. Put it in `<head>`: externals are awaited in document order before your inline code runs. Then call `boardChartTheme()` — see below |
-| Questions the human clicks answers into | **html** | the `interview` skill — `skills/interview/SKILL.md` |
+| Questions the human clicks answers into | **html** | the `interview` skill |
 | A screenshot or an image you generated | either | `board_upload_image`, then the snippet it hands back |
 
 **Charts: call `boardChartTheme()` first.** Chart.js draws in its own grey-on-white palette, which has nothing to do with Board's theme and is close to unreadable on the dark one. One call fixes it:
@@ -331,6 +331,6 @@ The shipped templates do this, and `skills/templates/templates.test.ts` compiles
 
 That exact `body` rule once cut the host's content column from 1169px to 312px, and it reads as a Board layout bug rather than a board-content bug.
 
-`skills/templates/interview-round.html` (interactive questions) and `skills/templates/dashboard.html` (charts and status) are the worked examples — start from one of them.
+`templates/interview-round.html` (interactive questions) and `templates/dashboard.html` (charts and status), both in this skill's own directory, are the worked examples — start from one of them.
 
-**Interactive boards** — a human clicking answers back to you — are the `interview` skill's job, not a thing to hand-roll: `skills/interview/SKILL.md` owns the question schema, and the one file that posts answers back.
+**Interactive boards** — a human clicking answers back to you — are the `interview` skill's job, not a thing to hand-roll: the `interview` skill owns the question schema, and the one file that posts answers back.

@@ -17,9 +17,7 @@ import { createContext, runInContext } from "node:vm";
 // visited in one session. Runtime errors are expected and ignored (there is no
 // DOM here) — only a redeclaration SyntaxError fails the test.
 function inlineScripts(html: string): string[] {
-  return [
-    ...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g),
-  ]
+  return [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)]
     .map((match) => match[1])
     .filter((body) => body.trim().length > 0);
 }
@@ -35,7 +33,10 @@ function redeclarationError(body: string): string | null {
       // guard written that way can never fail. (Dogfooded — this test was
       // written that way first, and passed against a template with the bug
       // deliberately reintroduced.)
-      const thrown = err as { constructor?: { name?: string }; message?: string };
+      const thrown = err as {
+        constructor?: { name?: string };
+        message?: string;
+      };
       if (thrown?.constructor?.name === "SyntaxError") {
         return `pass ${pass}: ${thrown.message}`;
       }

@@ -33,7 +33,9 @@ interface ChartDefaults {
   plugins?: { legend?: { labels?: { color?: string } } };
 }
 
-export function boardChartTheme(scope: typeof globalThis = globalThis): string[] {
+export function boardChartTheme(
+  scope: typeof globalThis = globalThis,
+): string[] {
   const doc = (scope as unknown as { document?: Document }).document;
   // Through the document's own view, not a bare global: that is what makes
   // this work in any realm the app is mounted in, tests included.
@@ -71,7 +73,9 @@ export function boardChartTheme(scope: typeof globalThis = globalThis): string[]
   return palette;
 }
 
-export function installBoardChartTheme(scope: typeof globalThis = globalThis): void {
+export function installBoardChartTheme(
+  scope: typeof globalThis = globalThis,
+): void {
   (scope as unknown as { boardChartTheme: () => string[] }).boardChartTheme =
     () => boardChartTheme(scope);
 }
