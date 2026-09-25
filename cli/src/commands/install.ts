@@ -3,6 +3,7 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   writeFileSync,
 } from "node:fs";
@@ -218,6 +219,34 @@ function repoSkillPath(name: string): string {
   return join(import.meta.dir, "..", "..", "..", "skills", name, "SKILL.md");
 }
 
+const REPO_TEMPLATES_DIR = join(
+  import.meta.dir,
+  "..",
+  "..",
+  "..",
+  "skills",
+  "templates",
+);
+
+// The html templates a skill tells an agent to start from. They ship INSIDE
+// each skill's own directory, so the reference in SKILL.md resolves for an
+// agent working in any repo — the skill used to name a Board-repo-relative
+// path, which is unreachable from every project except this one. Measured, not
+// theorised: an agent in a container that had the skill but no repo reported
+// being pointed at a file it could not open, and told not to hand-roll the one
+// thing inside it.
+//
+// Inside each skill dir rather than one shared dir beside them: a sibling
+// `templates/` under the skills root reads as a skill with no SKILL.md, and a
+// skill reaching into another skill's directory is not the portable unit D2
+// asks for. Two small files duplicated is the cheaper half of that trade.
+// Every skill gets every template — one rule, no per-skill manifest to drift.
+function repoTemplateFiles(): string[] {
+  return readdirSync(REPO_TEMPLATES_DIR)
+    .filter((file) => file.endsWith(".html"))
+    .sort();
+}
+
 function configHome(): string {
   const xdg = process.env.XDG_CONFIG_HOME;
   if (xdg !== undefined && xdg.trim().length > 0) {
@@ -237,21 +266,38 @@ function homeDir(): string {
 }
 
 // Copies every shipped skill into one agent's skills root (the directory that
-// holds <name>/SKILL.md). Returns false if any copy failed — the caller turns
-// that into a non-zero exit.
+// holds <name>/SKILL.md) — SKILL.md plus the templates it names. Returns false
+// if any copy failed — the caller turns that into a non-zero exit.
 function copySkills(skillsRoot: string, io: CommandIo): boolean {
   let ok = true;
+  const templates = repoTemplateFiles();
   for (const name of SKILL_NAMES) {
     const src = repoSkillPath(name);
     const dest = join(skillsRoot, name, "SKILL.md");
     try {
       mkdirSync(dirname(dest), { recursive: true });
       copyFileSync(src, dest);
-      io.stdout(`skill: ${dest}`);
     } catch (err) {
       ok = false;
       reportSkillCopyFailure(src, dest, err, io);
+      // A skills root we cannot create is one we cannot put templates in
+      // either. Report the cause once per skill, not once per file.
+      continue;
     }
+    let copied = 0;
+    for (const file of templates) {
+      const from = join(REPO_TEMPLATES_DIR, file);
+      const to = join(skillsRoot, name, "templates", file);
+      try {
+        mkdirSync(dirname(to), { recursive: true });
+        copyFileSync(from, to);
+        copied++;
+      } catch (err) {
+        ok = false;
+        reportSkillCopyFailure(from, to, err, io);
+      }
+    }
+    io.stdout(`skill: ${dest} (+${copied} templates)`);
   }
   return ok;
 }

@@ -118,6 +118,12 @@ function withIsolatedEnv(
 // to install.ts without a test update fails loudly instead of silently.
 const SKILL_NAMES_UNDER_TEST = ["board", "interview"] as const;
 const SKILL_COUNT = SKILL_NAMES_UNDER_TEST.length;
+// Listed here for the same reason: a template added to skills/templates/ should
+// show up as a deliberate test change, not pass silently.
+const TEMPLATES_UNDER_TEST = [
+  "dashboard.html",
+  "interview-round.html",
+] as const;
 
 const HEALTHY = () => true;
 const NO_CLAUDE = () => false;
@@ -538,7 +544,7 @@ describe("board install tokens", () => {
 });
 
 describe("board install wiring", () => {
-  test("copies every shipped skill into opencode, claude, and ~/.agents skill dirs", () => {
+  test("copies every shipped skill and its templates into every agent's skills dir", () => {
     withIsolatedEnv(({ home, xdg }) => {
       const db = freshDb();
       const { out, io } = capture();
@@ -565,6 +571,27 @@ describe("board install wiring", () => {
           expect(readFileSync(join(root, name, "SKILL.md"), "utf8")).toBe(
             expected,
           );
+          // The templates travel with the skill. Without them the skill points
+          // an agent in any other repo at a file it cannot open, while telling
+          // it not to hand-roll the submit call that file contains.
+          for (const file of TEMPLATES_UNDER_TEST) {
+            expect(
+              readFileSync(join(root, name, "templates", file), "utf8"),
+            ).toBe(
+              readFileSync(
+                join(
+                  import.meta.dir,
+                  "..",
+                  "..",
+                  "..",
+                  "skills",
+                  "templates",
+                  file,
+                ),
+                "utf8",
+              ),
+            );
+          }
         }
       }
       expect(out.filter((line) => line.startsWith("skill: "))).toHaveLength(
@@ -630,7 +657,9 @@ describe("board install wiring", () => {
           parse(readFileSync(configPath, "utf8"), [], {
             allowTrailingComma: true,
           }) as {
-            mcp: { servers: { board: { environment: Record<string, string> } } };
+            mcp: {
+              servers: { board: { environment: Record<string, string> } };
+            };
           }
         ).mcp.servers.board.environment.BOARD_MCP_TOKEN;
       expect(wiredToken()).toBe(minted);
