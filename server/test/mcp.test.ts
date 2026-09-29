@@ -179,6 +179,7 @@ describe("mcp endpoint", () => {
       expect(published.label).toBe("v1");
       expect(published.board_id).toBe(boardId);
       expect(published.content_bytes).toBe(Buffer.byteLength(DOC, "utf8"));
+      expect(published.format).toBe("markdown");
       // no full-content dump: version metadata + byte length only
       expect(published).not.toHaveProperty("content");
       expect(published).not.toHaveProperty("source_md");

@@ -1,0 +1,26 @@
+diff --git a/lib/html-parser/HTMLParser.js b/lib/html-parser/HTMLParser.js
+index 65de1f2fcd24e0119b157dfbece72e69360300b2..b5b1a88e6ab261ab0b5345299771d0ebe0cef71c 100644
+--- a/lib/html-parser/HTMLParser.js
++++ b/lib/html-parser/HTMLParser.js
+@@ -168,7 +168,7 @@ export default class HTMLParser {
+                 case MarkupReadStateEnum.any:
+                     // Plain text between tags.
+                     if (match.index !== lastIndex &&
+-                        (match[1] || match[2] || match[3] || match[4] || match[5] !== undefined || match[6])) {
++                        (match[1] || match[2] || match[3] || match[5] !== undefined || match[6])) {
+                         this.parsePlainText(html.substring(lastIndex, match.index));
+                     }
+                     if (match[1]) {
+diff --git a/src/html-parser/HTMLParser.ts b/src/html-parser/HTMLParser.ts
+index 4475370e641f59cb554d6d42dfa2ba35529c35fd..fc08616481856c1223932fb27147381f425c5483 100755
+--- a/src/html-parser/HTMLParser.ts
++++ b/src/html-parser/HTMLParser.ts
+@@ -234,7 +234,7 @@ export default class HTMLParser {
+ 					// Plain text between tags.
+ 					if (
+ 						match.index !== lastIndex &&
+-						(match[1] || match[2] || match[3] || match[4] || match[5] !== undefined || match[6])
++						(match[1] || match[2] || match[3] || match[5] !== undefined || match[6])
+ 					) {
+ 						this.parsePlainText(html.substring(lastIndex, match.index));
+ 					}

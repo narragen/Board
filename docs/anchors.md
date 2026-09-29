@@ -11,7 +11,7 @@ Every annotatable element carries a `data-ba` attribute. Ids are injected at pub
 - Ids are **deterministic** (same input → same ids) and collision-free (a clash gets a `-2`, `-3`… suffix).
 - `data-ba` elements are looked up by **iteration + attribute compare, never CSS-selector interpolation** — agent-supplied ids never touch a selector string (injection surface).
 
-What gets ids, per board format (one document model, D18 — see [decisions.md](decisions.md) D18):
+What gets ids, per version format (one document model, D18 — see [decisions.md](decisions.md) D18):
 
 - **markdown**: the publish pipeline is marked GFM → `asset:` embed rewrite → DOMPurify → mermaid-block conversion → katex → shiki → task-list glyphs → id injection. DOMPurify strips scripts, so sanitized input arrives `data-ba`-free and every top-level block, heading, and table row gets a fresh positional id.
 - **html**: the author's document, **unsanitized** (D18). The same injector runs with `keepExisting: true`: opt-in `data-ba="id"` markers (and `data-ba-label="…"` labels) are **kept verbatim**, only the gaps are filled — unlabeled top-level body children and their table rows. `<script>` elements never get auto-injected ids (invisible, unhighlightable content); an opt-in marker on one would still be kept. The **injected document is what gets stored** and later mounted into the host DOM; previously stored versions are never retro-injected.

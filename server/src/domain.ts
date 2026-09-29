@@ -6,6 +6,8 @@ export type BoardStatus = "open" | "ended";
 export interface Board {
   id: string;
   title: string;
+  // The format the board was created with. Each version carries its own
+  // (VersionMeta.format) — a board may mix markdown and html versions.
   format: BoardFormat;
   status: BoardStatus;
   tags: string[];
@@ -17,6 +19,7 @@ export interface Board {
 export interface VersionMeta {
   board_id: string;
   n: number;
+  format: BoardFormat;
   label: string | null;
   note: string | null;
   anchors: ExtractedAnchor[];

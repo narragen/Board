@@ -503,6 +503,52 @@ describe("board and version queries", () => {
     expect(listVersions(db, "missing")).toEqual([]);
   });
 
+  // A board may mix formats: each version is rendered, stored, and listed by
+  // its OWN format — the board's format is only what it was created with.
+  test("a markdown board takes an html version; each version keeps its own format, restore included", async () => {
+    const board = createBoard(db, dataDir, {
+      title: "Mixed",
+      format: "markdown",
+      actor: "human",
+    });
+    const v1 = await publishVersion(db, dataDir, board.id, {
+      format: "markdown",
+      content: '# Plan\n\n<b onmouseover="x()">hi</b>',
+      expected_version: 0,
+      actor: "human",
+    });
+    const v2 = await publishVersion(db, dataDir, board.id, {
+      format: "html",
+      content: HTML_DOC,
+      expected_version: 1,
+      actor: "human",
+    });
+    expect(v1.format).toBe("markdown");
+    // the markdown version still went through DOMPurify
+    expect(v1.content).not.toContain("onmouseover");
+    expect(v2.format).toBe("html");
+    expect(v2.source_md).toBe(null);
+    expect(v2.content).toContain('data-ba="s1"');
+    expect(listVersions(db, board.id).map((m) => m.format)).toEqual([
+      "markdown",
+      "html",
+    ]);
+    expect(getBoard(db, board.id)?.format).toBe("markdown");
+
+    const v3 = restoreVersion(db, dataDir, board.id, {
+      from_n: 2,
+      expected_version: 2,
+      actor: "human",
+    });
+    expect(v3.format).toBe("html");
+    const v4 = restoreVersion(db, dataDir, board.id, {
+      from_n: 1,
+      expected_version: 3,
+      actor: "human",
+    });
+    expect(v4.format).toBe("markdown");
+  });
+
   test("endBoard on an unknown board throws BoardNotFound", () => {
     expect(() => endBoard(db, dataDir, "missing", "human")).toThrow(
       BoardNotFound,

@@ -142,6 +142,24 @@ const MIGRATIONS: ReadonlyArray<{ version: number; sql: string }> = [
       WHERE kind = 'session' AND expires_at IS NULL;
     `,
   },
+  {
+    // Format is per version, not per board: a board may mix markdown and
+    // html versions, and the viewer renders each by its own format.
+    // Backfill: markdown versions always keep their source (source_md is
+    // non-null, even when empty); html versions never do. SQLite cannot add a
+    // NOT NULL column without a DEFAULT, and a CHECK passes NULL — so the
+    // trigger is the NOT NULL: a write that omits format (e.g. a pre-D30
+    // binary run against this db) fails instead of rendering as markdown.
+    version: 7,
+    sql: `
+      ALTER TABLE versions ADD COLUMN format TEXT CHECK (format IN ('markdown', 'html'));
+      UPDATE versions
+      SET format = CASE WHEN source_md IS NOT NULL THEN 'markdown' ELSE 'html' END;
+      CREATE TRIGGER versions_format_required BEFORE INSERT ON versions
+      WHEN NEW.format IS NULL
+      BEGIN SELECT RAISE(ABORT, 'versions.format is required'); END;
+    `,
+  },
 ];
 
 export function openDb(dataDir: string): Database {
