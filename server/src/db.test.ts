@@ -79,8 +79,59 @@ describe("openDb", () => {
     const migrations = second
       .prepare("SELECT version FROM schema_migrations ORDER BY version")
       .all() as Array<{ version: number }>;
-    expect(migrations.map((row) => row.version)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(migrations.map((row) => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7]);
     second.close();
+  });
+
+  // Migration 7 backfills versions.format from source_md: markdown always
+  // keeps its source (even an empty one), html never does. Rows are written
+  // against the pre-7 schema, then the reopen runs the migration for real.
+  test("migration 7 backfills each version's format from source_md", () => {
+    const dir = freshDir();
+    const pre = openDb(dir);
+    pre.exec("DROP TRIGGER versions_format_required;");
+    pre.exec("ALTER TABLE versions DROP COLUMN format;");
+    pre.exec("DELETE FROM schema_migrations WHERE version = 7;");
+    pre
+      .prepare(
+        "INSERT INTO boards (id, title, format, created_by, created_at) VALUES ('b', 't', 'markdown', 'a', '2026-01-01T00:00:00Z')",
+      )
+      .run();
+    const insert = pre.prepare(
+      "INSERT INTO versions (board_id, n, content, source_md, created_by, created_at) VALUES ('b', ?, '<p>x</p>', ?, 'a', '2026-01-01T00:00:00Z')",
+    );
+    insert.run(1, "# md");
+    insert.run(2, "");
+    insert.run(3, null);
+    pre.close();
+
+    const db = openDb(dir);
+    const rows = db
+      .prepare("SELECT n, format FROM versions ORDER BY n")
+      .all() as Array<{ n: number; format: string }>;
+    expect(rows).toEqual([
+      { n: 1, format: "markdown" },
+      { n: 2, format: "markdown" },
+      { n: 3, format: "html" },
+    ]);
+    db.close();
+  });
+
+  // The shape of a pre-D30 binary's insert (no format column named): it must
+  // fail, not store a NULL format that the viewer would render as markdown.
+  test("a version insert without a format is rejected", () => {
+    const db = openDb(freshDir());
+    db.prepare(
+      "INSERT INTO boards (id, title, format, created_by, created_at) VALUES ('b', 't', 'markdown', 'a', '2026-01-01T00:00:00Z')",
+    ).run();
+    expect(() =>
+      db
+        .prepare(
+          "INSERT INTO versions (board_id, n, content, source_md, created_by, created_at) VALUES ('b', 1, '<p>x</p>', NULL, 'a', '2026-01-01T00:00:00Z')",
+        )
+        .run(),
+    ).toThrow("versions.format is required");
+    db.close();
   });
 
   test("rejects a second daemon-style writer cleanly via WAL (two open connections)", () => {

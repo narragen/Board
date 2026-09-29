@@ -153,6 +153,7 @@ interface BoardRow {
 interface VersionRow {
   board_id: string;
   n: number;
+  format: string;
   label: string | null;
   note: string | null;
   content?: string;
@@ -179,6 +180,7 @@ function mapVersionRow(row: VersionRow): Version {
   return {
     board_id: row.board_id,
     n: row.n,
+    format: row.format as BoardFormat,
     label: row.label,
     note: row.note,
     content: row.content ?? "",
@@ -193,6 +195,7 @@ function mapVersionMetaRow(row: VersionRow): VersionMeta {
   return {
     board_id: row.board_id,
     n: row.n,
+    format: row.format as BoardFormat,
     label: row.label,
     note: row.note,
     anchors: JSON.parse(row.anchors) as ExtractedAnchor[],
@@ -347,6 +350,7 @@ export async function publishVersion(
     boardId,
     n,
     {
+      format: input.format,
       label: input.label ?? null,
       note: input.note ?? null,
       content,
@@ -385,6 +389,7 @@ function commitVersion(
   boardId: string,
   n: number,
   fields: {
+    format: BoardFormat;
     label: string | null;
     note: string | null;
     content: string;
@@ -397,10 +402,11 @@ function commitVersion(
 ): Version {
   const write = db.transaction(() => {
     db.prepare(
-      "INSERT INTO versions (board_id, n, label, note, content, source_md, anchors, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO versions (board_id, n, format, label, note, content, source_md, anchors, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     ).run(
       boardId,
       n,
+      fields.format,
       fields.label,
       fields.note,
       fields.content,
@@ -456,7 +462,7 @@ export function listVersions(db: Database, boardId: string): VersionMeta[] {
   // metadata only — the content column is deliberately not selected
   const rows = db
     .prepare(
-      "SELECT board_id, n, label, note, anchors, created_by, created_at FROM versions WHERE board_id = ? ORDER BY n ASC",
+      "SELECT board_id, n, format, label, note, anchors, created_by, created_at FROM versions WHERE board_id = ? ORDER BY n ASC",
     )
     .all(boardId) as VersionRow[];
   return rows.map(mapVersionMetaRow);
@@ -527,6 +533,7 @@ export function restoreVersion(
     boardId,
     n,
     {
+      format: from.format,
       label: `restore of v${input.from_n}`,
       note: null,
       content: from.content,

@@ -5,8 +5,9 @@ import { mountBoardDocument } from "./board-mount.ts";
 import { renderMermaidBlocks } from "./mermaid.ts";
 
 // Gets the published document's diagrams rendered inside `containerRef`, and
-// for html boards does the mounting too. The two formats take different paths
-// (D18) and exactly one of the effects below applies to a given board.
+// for html versions does the mounting too. The two formats take different paths
+// (D18) and exactly one of the effects below applies to a given version — a
+// board may mix formats, so the switch is the version's format, not the board's.
 //
 // `version` + `data` are the mounted content's identity, not data this hook
 // reads for its own sake: a new pair means the content DOM was replaced. Call
@@ -17,7 +18,7 @@ export function useBoardDocument(
   version: Version | null,
   data: BoardWithVersions | null,
 ): void {
-  // Markdown boards: content is committed by React's render, so the blocks
+  // Markdown versions: content is committed by React's render, so the blocks
   // are there as soon as this runs. The html case is chained onto the mount
   // below instead, because that content arrives asynchronously.
   useEffect(() => {
@@ -26,7 +27,7 @@ export function useBoardDocument(
       version === null ||
       data === null ||
       root === null ||
-      data.board.format === "html"
+      version.format === "html"
     ) {
       return;
     }
@@ -37,7 +38,7 @@ export function useBoardDocument(
     };
   }, [containerRef, version, data]);
 
-  // D18: html boards mount into the host DOM like markdown — the document is
+  // D18: html versions mount into the host DOM like markdown — the document is
   // parsed, head styles and body children are injected, and scripts are
   // re-created so they actually run (innerHTML would not execute them). The
   // mount is async: external scripts are awaited in document order so inline
@@ -49,7 +50,7 @@ export function useBoardDocument(
       version === null ||
       data === null ||
       root === null ||
-      data.board.format !== "html"
+      version.format !== "html"
     ) {
       return;
     }

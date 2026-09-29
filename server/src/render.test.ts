@@ -275,6 +275,26 @@ describe("renderHtmlDocument", () => {
     );
     expect(html.startsWith("<!doctype html><html>")).toBe(true);
   });
+
+  // Unpatched happy-dom re-emits the text before a stray `-->` (A --> B
+  // became A A --> B), breaking every mermaid arrow on an html board.
+  // Fixed by patches/happy-dom@20.14.5.patch; this fails if the patch stops applying.
+  test("a stray --> in text survives parsing, while real comments and script bodies stay intact", () => {
+    const { html } = renderHtmlDocument(
+      [
+        '<body><pre class="mermaid">flowchart LR\n A --> B\n B --> C</pre>',
+        "<p>x --> y</p><p>a --!> b</p><textarea>c --> d</textarea>",
+        "<!-- note --><script>if (a-->0) {}</script></body>",
+      ].join(""),
+    );
+    expect(html).toBe(
+      [
+        '<!doctype html><html><head></head><body><pre class="mermaid" data-ba="b1">flowchart LR\n A --&gt; B\n B --&gt; C</pre>',
+        '<p data-ba="b2">x --&gt; y</p><p data-ba="b3">a --!&gt; b</p><textarea data-ba="b4">c --&gt; d</textarea>',
+        "<!-- note --><script>if (a-->0) {}</script></body></html>",
+      ].join(""),
+    );
+  });
 });
 
 // Task lists are a static-snapshot affordance: the GFM checkbox input is

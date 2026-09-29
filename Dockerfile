@@ -6,6 +6,7 @@
 FROM oven/bun:1-slim AS deps
 WORKDIR /app
 COPY package.json bun.lock ./
+COPY patches patches
 COPY server/package.json server/
 COPY cli/package.json cli/
 COPY web/package.json web/
@@ -18,6 +19,7 @@ RUN cd web && bun run build
 FROM oven/bun:1-slim AS prod-deps
 WORKDIR /app
 COPY package.json bun.lock ./
+COPY patches patches
 COPY server/package.json server/
 COPY cli/package.json cli/
 COPY web/package.json web/

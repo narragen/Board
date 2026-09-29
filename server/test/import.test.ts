@@ -398,6 +398,7 @@ describe("export → import round trip", () => {
     });
     expect(v1res.status).toBe(200);
     const v1 = (await v1res.json()) as {
+      format: string;
       content: string;
       source_md: string | null;
       label: string | null;
@@ -424,6 +425,8 @@ describe("export → import round trip", () => {
     expect(v1.source_md).toContain(`asset:${newPng?.id}`);
     expect(v1.source_md).not.toContain(f.oldPngId);
     expect(v1.label).toBe("first cut");
+    // a mixed board round-trips each version's own format (D30)
+    expect(v1.format).toBe("markdown");
     // fresh deterministic anchor ids on the re-rendered document
     expect(v1.anchors.map((a) => a.id)).toEqual(["b1", "b2", "b3"]);
 
@@ -433,9 +436,11 @@ describe("export → import round trip", () => {
     });
     expect(v2res.status).toBe(200);
     const v2 = (await v2res.json()) as {
+      format: string;
       content: string;
       anchors: Array<{ id: string; kind: string }>;
     };
+    expect(v2.format).toBe("html");
     expect(v2.content).toContain('data-ba="s1"');
     expect(v2.content).toContain(`src="/assets/${newSvg?.id}"`);
     expect(v2.content).not.toContain(f.oldSvgId);

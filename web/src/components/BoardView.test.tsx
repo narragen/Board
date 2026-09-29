@@ -154,9 +154,9 @@ describe("BoardView", () => {
     expect(container.querySelector("div.board-content")).not.toBe(null);
   });
 
-  test("board content carries the board format class", async () => {
+  test("board content carries the version's format class", async () => {
     // snapshot-only styling (static markdown task-list glyphs) must never
-    // reach html boards, whose checkboxes may be interactive (D18)
+    // reach html versions, whose checkboxes may be interactive (D18)
     const md = render(<BoardView id="b1" />);
     await act(async () => {});
     expect(
@@ -167,6 +167,44 @@ describe("BoardView", () => {
     expect(
       html.querySelector("div.board-content")?.classList.contains("html"),
     ).toBe(true);
+  });
+
+  // A board may mix formats: each version renders by its OWN format. The
+  // failure this guards: an html version on a markdown board went through the
+  // markdown innerHTML path — dead markup, scripts never ran.
+  test("a mixed board renders each version by its own format, both directions", async () => {
+    const container = render(<BoardView id="b-mixed" />);
+    await act(async () => {});
+    let content = container.querySelector("div.board-content");
+    // v2 (current) is html: mounted, not innerHTML'd
+    expect(content?.classList.contains("html")).toBe(true);
+    expect(content?.querySelector('[data-ba="s-header"]')?.textContent).toBe(
+      "Dashboard v2",
+    );
+    expect(content?.querySelector("script[src]")).not.toBe(null);
+    const pill = container.querySelector(
+      "nav.version-switcher button.pill",
+    ) as HTMLElement;
+    await act(async () => {
+      pill.click();
+    });
+    // v1 is markdown: rendered in place, nothing of the html version left
+    content = container.querySelector("div.board-content");
+    expect(content?.classList.contains("markdown")).toBe(true);
+    expect(content?.textContent).toContain("alpha beta gamma");
+    expect(content?.querySelector('[data-ba="s-header"]')).toBe(null);
+    expect(content?.querySelector("script")).toBe(null);
+    // and back to html
+    const pills = container.querySelectorAll(
+      "nav.version-switcher button.pill",
+    );
+    await act(async () => {
+      (pills[1] as HTMLElement).click();
+    });
+    content = container.querySelector("div.board-content");
+    expect(content?.classList.contains("html")).toBe(true);
+    expect(content?.textContent).toContain("Dashboard v2");
+    expect(content?.textContent).not.toContain("alpha beta gamma");
   });
 
   test("switching versions remounts the html document in place", async () => {

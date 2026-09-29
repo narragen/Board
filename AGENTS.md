@@ -85,7 +85,7 @@ These exist for security reasons ([docs/security.md](docs/security.md)). Do not 
 2. **Host-render, CSP is the guard.** Agent HTML boards render in the host chrome with scripts running (D18, owner decision 2026-09-15). The host CSP is the guard: `connect-src 'self'` never opens, `form-action 'self'` stays. Never widen the host CSP beyond the allowlist in [docs/security.md](docs/security.md).
 3. **Writes go through the daemon.** All writes go through the daemon API. Agents never write to `~/.board` directly.
 4. **Events are append-only.** Never mutate or delete an event row.
-5. **Markdown through DOMPurify.** Markdown published content passes through DOMPurify — no exceptions. html-format boards are exempt per D18; never add sanitization to them, or skip it for markdown, without the owner's say-so.
+5. **Markdown through DOMPurify.** Markdown published content passes through DOMPurify — no exceptions. html-format versions are exempt per D18 (a board may mix formats, D30); never add sanitization to them, or skip it for markdown, without the owner's say-so.
 6. **Verified asset ingest.** Asset ingest verifies magic bytes + mime allowlist + size cap; the `{path}` file-copy route must never be usable to read non-image files.
 7. **Tokens stored hashed.** Never log or commit tokens; tokens are stored hashed. (The one sanctioned ephemeral exception is the D20 session-instance credential env file — mode 0600, purged at `board down`.)
 

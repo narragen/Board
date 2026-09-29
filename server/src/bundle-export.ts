@@ -57,18 +57,17 @@ export function buildBundle(
       );
     }
     // SOURCE content only (docs/plan.md "bundle export"). Format is per
-    // publish: a markdown version keeps source_md (the derived HTML is
+    // version (D30): a markdown version keeps source_md (the derived HTML is
     // re-computed on import — re-sanitized, fresh anchors); an html version
     // carries the stored id-injected document, which IS its source per D18
     // (import re-derives anchors from it, keepExisting keeps the ids).
-    const isMarkdown = full.source_md !== null;
-    const source = isMarkdown ? full.source_md : full.content;
+    const source = full.format === "markdown" ? full.source_md : full.content;
     if (source === null) {
       throw new StoreError(
         `version ${meta.n} of board "${boardId}" has no source to export`,
       );
     }
-    const file = versionFileName(meta.n, isMarkdown ? "markdown" : "html");
+    const file = versionFileName(meta.n, full.format);
     entries[file] = new TextEncoder().encode(source);
     versionIndex.push({
       n: meta.n,

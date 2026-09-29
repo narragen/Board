@@ -35,6 +35,7 @@ ADR-style, oldest first. Entries are append-only: superseding a decision adds a 
 | D27 | Round 2 findings: boards share a global scope; Tailwind leaks its style tag | 2026-09-24 |
 | D28 | Round 2 rulings: re-wire without rotating, a chart palette, Tailwind baseline | 2026-09-24 |
 | D29 | A skill carries its own files; a container says when its state is disposable | 2026-09-24 |
+| D30 | A board may mix formats; happy-dom's tokenizer is patched | 2026-09-29 |
 
 ## D1 — Build from scratch, not a fork — 2026-09-15
 
@@ -279,3 +280,10 @@ Ruled by the owner on board `nlHc77T540`, round 2. Four of five followed the rec
   - **A warning, not a refusal.** The daemon works; the exposure is future data loss, and refusing to start would break every box running today over a risk that has not fired yet. The check is container-only, skips the system temp dir (every test and `make smoke` lives there, where the warning would be true and useless), and tells a mount from the root filesystem by **comparing devices** — which is what makes it a measurement rather than a guess about paths.
   - **Still on the human:** the mount itself is host-side agentbox configuration. The code can only refuse to lose data quietly.
 - **Process note:** `make lint` runs `biome check --write`, so formatting drift is invisible to whoever runs it and only a plain `biome check` reveals it — two files reached `main` unformatted in PR #9. A non-writing check belongs in the gate.
+
+## D30 — a board may mix formats; happy-dom's tokenizer is patched — 2026-09-29
+
+- **Context:** an agent's interview round, published as html to the markdown board it had been using for the plan, rendered as dead markup: the viewer chose its render path from the *board's* format while the server rendered by the *publish's*. The same mismatch sent unsanitized html through the markdown `innerHTML` path, where inline handlers run — invariant 5 (markdown through DOMPurify) no longer held for what a "markdown board" displayed.
+- **Decision:** format is per version, as [plan.md](plan.md) "Data model" always framed it (board format as input convenience). `versions.format` is stored (migration 7, backfilled from `source_md`), returned on `Version`/`VersionMeta`, and the viewer renders each version by its own format. `Board.format` is only the format the board was created with. Migration 7 adds a trigger as the column's NOT NULL (SQLite cannot add one to an existing table, and a CHECK passes NULL): a pre-D30 binary's insert fails instead of rendering as markdown. A publish-time guard rejecting mismatches was built first and dropped: it closed the hole but forced a plan and its follow-up questions onto separate boards.
+- **happy-dom patch:** its HTML tokenizer re-emitted the text before any stray `-->` in a text node (`A --> B` stored as `A A --> B`), corrupting every mermaid arrow on html boards. The fix is one token in `HTMLParser`, applied with `bun patch` (`patches/happy-dom@20.14.5.patch`). happy-dom is pinned exactly: `bun install` silently drops a patch whose version no longer resolves, and `render.test.ts` is the only thing that would notice. Drop it when upstream fixes the bug.
+

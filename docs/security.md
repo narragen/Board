@@ -12,7 +12,7 @@ Threat model and required mitigations for v1. The **seven non-negotiable invaria
 
 **Owner decision 2026-09-15 ([docs/decisions.md](decisions.md) D18):** agent HTML boards render in the host chrome, unsandboxed, with scripts running in the app's origin. The earlier two-origin iframe model was built, dogfooded one round, and removed the same day — the owner judged the interactivity cost higher than the risk.
 
-There is no board iframe, no second origin, and no sanitization of html-format boards. What stands between board script and the app is the host CSP:
+There is no board iframe, no second origin, and no sanitization of html-format versions. What stands between board script and the app is the host CSP:
 
 ```
 default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';
@@ -28,7 +28,7 @@ frame-ancestors 'none'; object-src 'none'; base-uri 'none'
 
 **Named, owner-accepted residual risks:** board script shares the page with the session token (localStorage) and the API — it can act as the human (write/resolve anything) and paint arbitrary UI over the app (phishing). Rationale: boards are published by the user's own agents, which already hold machine-level access. **Foreign content invalidates this rationale** — bundle import re-runs the full quarantine ([security.md](security.md) "Import quarantine"); any remote mode remains unshipped.
 
-Markdown boards are unaffected: they pass through DOMPurify at publish and are script-free by construction (invariant 5, markdown through DOMPurify).
+Markdown versions are unaffected: they pass through DOMPurify at publish and are script-free by construction (invariant 5, markdown through DOMPurify). A board may mix formats (D30), so sanitization and rendering follow each version's own format, never the board's.
 
 ## API hardening
 
@@ -62,7 +62,7 @@ The audit view's endpoints are reads over existing state (plus exactly one new w
 
 ## Content rules
 
-- Markdown rendered in the host chrome passes through DOMPurify, always; mermaid runs at `securityLevel: 'strict'`; katex through its standard pipeline. html-format boards are stored and rendered unsanitized per D18 — the CSP above is their only guard, by owner decision.
+- Markdown rendered in the host chrome passes through DOMPurify, always; mermaid runs at `securityLevel: 'strict'`; katex through its standard pipeline. html-format versions are stored and rendered unsanitized per D18 — the CSP above is their only guard, by owner decision.
 - html publishes store an id-injected derived document (auto `data-ba` on unlabeled blocks/rows for anchoring); previously stored versions are never retro-injected.
 - Boards: 8 MB cap per document. Assets: 10 MB, mime allowlist, **magic-byte verification** — the `{path}` file-copy route can only ever ingest real images and must never become a file-read primitive; SVG is sanitized at ingest.
 - Agent tokens: random ≥128-bit, stored SHA-256, revocable, one per agent, never logged or committed. Human browser session: one-time `?token=` exchange via `board open`, stored in localStorage, sent as bearer — and **expiring 30 days after exchange** (D19; enforced at auth time, so a forgotten tab's credential dies on its own; revocation in the audit view remains the active remediation, `board open` re-authenticates).
@@ -115,7 +115,7 @@ Webhook URLs are **owner/agent-chosen and can point anywhere, including localhos
 
 - Board script can read the session token, act as the human on the API, and repaint the app (D18, owner-accepted; rationale in the render trust model above). `connect-src 'self'` still blocks network exfiltration and localhost port probing.
 - CPU DoS from a hostile board: no in-page throttling; mitigations are the 8 MB cap and closing the tab.
-- Imported html boards run in the host chrome per D18 — the import quarantine re-runs the publish pipelines (above) but does not sandbox html; remote modes (ngrok etc.) remain unshipped and must be re-examined before they are.
+- Imported html versions run in the host chrome per D18 — the import quarantine re-runs the publish pipelines (above) but does not sandbox html; remote modes (ngrok etc.) remain unshipped and must be re-examined before they are.
 - The D20 session-instance env file is plaintext at rest for the session's lifetime — mode 0600 in the user's own data dir, purged at `down`/prune (owner-accepted as the price of a sourceable agent credential; D20).
 - The D22 connector's trust model: registry-derived (instance) URLs are structurally loopback-guarded, but the shared-daemon URL is built from the `BOARD_*` env and trusted as explicit configuration (invariant 1's carve-out — the documented Docker opt-out); and tokens are sent to whatever process answers the health check on the resolved loopback port — a health check is liveness, not pid verification. Bounded because instance tokens are session-scoped and ephemeral (purged at `down`), and the shared token is the same loopback-library credential agents already hold — the same trust class as the daemon's existing loopback bearer usage.
 - The D23 D4 extension of that surface: `board_connect {url, token}` pins are user-supplied targets, guarded by the same structural loopback check as the registry (loopback hostname allowlist; userinfo/query URLs refused — a URL-embedded credential would leak through error text — invariant 7, tokens stored hashed; the token rides only in the tool param and the Authorization header); every connector fetch refuses redirects (`redirect: "error"` — a loopback server that 30x-redirects outward must never make the connector fetch a non-loopback host; audit 2026-09-22); and the connector-local `board_servers`/`board_connect` tools never emit credential material — the shared token in a tool param is the same accepted exposure class as D17/D22 plaintext-env.

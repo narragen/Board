@@ -204,6 +204,7 @@ const VERSIONS: VersionMeta[] = [
   {
     board_id: "b1",
     n: 1,
+    format: "markdown",
     label: null,
     note: null,
     anchors: [],
@@ -213,6 +214,7 @@ const VERSIONS: VersionMeta[] = [
   {
     board_id: "b1",
     n: 2,
+    format: "markdown",
     label: "after review",
     note: null,
     anchors: [],
@@ -226,6 +228,7 @@ const VERSIONS: VersionMeta[] = [
 const RESTORED_META: VersionMeta = {
   board_id: "b1",
   n: 3,
+  format: "markdown",
   label: "restore of v1",
   note: null,
   anchors: [],
@@ -236,6 +239,7 @@ const RESTORED_META: VersionMeta = {
 const MD_VERSION: Version = {
   board_id: "b1",
   n: 2,
+  format: "markdown",
   label: "after review",
   note: null,
   content:
@@ -271,6 +275,7 @@ const HTML_V2 = htmlDoc("Dashboard v2", ".dash-note { color: purple; }");
 const HTML_VERSION: Version = {
   board_id: "b-html",
   n: 2,
+  format: "html",
   label: null,
   note: null,
   content: HTML_V2,
@@ -331,6 +336,15 @@ export function installApiMock(): void {
           versions: VERSIONS,
         };
       }
+      // a markdown board whose v2 is html: each version renders by its own format
+      if (id === "b-mixed") {
+        return {
+          board: { ...MD_BOARD, id: "b-mixed" },
+          versions: VERSIONS.map((v) =>
+            v.n === 2 ? { ...v, format: "html" as const } : v,
+          ),
+        };
+      }
       if (id === "b-ended") {
         return {
           board: { ...MD_BOARD, status: "ended" as const },
@@ -353,6 +367,11 @@ export function installApiMock(): void {
       }
       if (id === "b-html") {
         return { ...HTML_VERSION, n, content: n === 1 ? HTML_V1 : HTML_V2 };
+      }
+      if (id === "b-mixed") {
+        return n === 2
+          ? { ...HTML_VERSION, board_id: "b-mixed" }
+          : { ...MD_VERSION, board_id: "b-mixed", n };
       }
       // faithful n — a restore lands the view on the new current version and
       // this is what its fetch returns

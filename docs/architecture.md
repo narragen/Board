@@ -104,7 +104,7 @@ SQLite is the queryable source of truth; the bundle layout exists so a board is 
 
 ## One document model
 
-Every version is stored as **one HTML document** rendered in the host chrome. `format` (markdown | html) is input convenience:
+Every version is stored as **one HTML document** rendered in the host chrome. `format` (markdown | html) is chosen per publish and stored per version — a board may mix them, and the viewer renders each version by its own format (D30):
 
 - **markdown** → the daemon renders at publish (marked GFM → DOMPurify → mermaid strict → katex → Shiki highlighting), auto-injecting `data-ba` ids on every top-level block, heading, and table row. The derived document is script-free by construction (DOMPurify strips scripts). The markdown source is kept alongside the derived HTML.
 - **html** → stored as an id-injected derived document (auto `data-ba` on unlabeled top-level blocks and rows; opt-in markers and labels kept, D18: no sanitization) and mounted into the app's DOM with head styles carried over and scripts re-created so they actually execute (`innerHTML` never runs script elements). Full hover/selection anchoring applies to every board.

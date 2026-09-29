@@ -24,7 +24,7 @@ Error shape: `{ "error": { "code": "<code>", "message": "<human-readable>" } }` 
 | `GET /api/boards` | any | filters: `status` (`open`\|`ended`), `tag`, `author` | `BoardWithCommentCounts[]` — each board + `unresolved_comments` + `subscriber_count` | 400 `invalid_request` |
 | `POST /api/boards` | any | `{title, format, tags?}` (`format`: `markdown`\|`html`) | `201` `Board` (starts at v0, empty) | 400 `invalid_request` |
 | `GET /api/boards/:id` | any | — | `{board: Board, versions: VersionMeta[], unresolved_comments: number}` (metadata only — no content) | 404 `board_not_found` |
-| `POST /api/boards/:id/publish` | any | `{format, content, expected_version, label?, note?}` | `201` full `Version` (content + `source_md` when markdown) | 400 `invalid_request` / `invalid_asset_embed`, 404 `board_not_found`, 409 `version_conflict` (+`current_version`) / `board_ended`, 413 `payload_too_large` (8 MB doc cap) |
+| `POST /api/boards/:id/publish` | any | `{format, content, expected_version, label?, note?}` | `201` full `Version` (content + `source_md` when markdown). `format` is per version — any board takes either (D30) | 400 `invalid_request` / `invalid_asset_embed`, 404 `board_not_found`, 409 `version_conflict` (+`current_version`) / `board_ended`, 413 `payload_too_large` (8 MB doc cap) |
 | `POST /api/boards/:id/end` | any | — | `200` `Board` (status `ended`); writes then 409, reads stay | 404 `board_not_found`, 409 `board_ended` (already ended) |
 | `POST /api/boards/:id/restore` | any | `{from_n, expected_version}` | `201` full `Version` (copy of `from_n`, labeled `restore of vN`) | 404 `board_not_found` / `version_not_found`, 409 `version_conflict` / `board_ended` |
 
@@ -36,7 +36,7 @@ Publish and restore take `expected_version` (the board's `current_version`); a s
 
 | Method + path | Auth | Body / params | Response | Errors |
 |---|---|---|---|---|
-| `GET /api/boards/:id/versions/:n` | any | `n`: non-negative integer | full `Version` — `{board_id, n, label, note, content, source_md, anchors, created_by, created_at}` | 400 `invalid_request`, 404 `board_not_found` / `version_not_found` |
+| `GET /api/boards/:id/versions/:n` | any | `n`: non-negative integer | full `Version` — `{board_id, n, format, label, note, content, source_md, anchors, created_by, created_at}` | 400 `invalid_request`, 404 `board_not_found` / `version_not_found` |
 
 Versions are immutable; `anchors` is the `ExtractedAnchor[]` list extracted at publish (see [anchors.md](anchors.md)).
 
@@ -197,7 +197,7 @@ The daemon's 13 tools:
 | Tool | Arguments | Returns (the JSON in `content[0].text`) |
 |---|---|---|
 | `board_create` | `title`, `format` (default `markdown`), `tags?` | full `Board` |
-| `board_publish` | `board_id`, `format`, `content`, `expected_version`, `label?`, `note?` | version **metadata** + `content_bytes` — `{board_id, n, label, note, anchors, created_by, created_at, content_bytes}`; content never rides back (the agent already holds it) |
+| `board_publish` | `board_id`, `format`, `content`, `expected_version`, `label?`, `note?` | version **metadata** + `content_bytes` — `{board_id, n, format, label, note, anchors, created_by, created_at, content_bytes}`; content never rides back (the agent already holds it) |
 | `board_list` | `status?`, `tag?`, `author?` | boards + `unresolved_comments` + `subscriber_count` |
 | `board_get` | `board_id` | `{board, versions: VersionMeta[]}` |
 | `board_get_comments` | `board_id`, `since` (default 0 — exclusive cursor) | `{comments: Comment[], last_seq}` — **the** feedback consumption path (D15); polls count as presence |

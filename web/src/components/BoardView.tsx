@@ -272,12 +272,12 @@ export function BoardView({ id }: { id: string }) {
             <div
               ref={containerRef}
               // the format class scopes snapshot-only styling (e.g. the static
-              // markdown task-list glyphs) away from html boards, whose
+              // markdown task-list glyphs) away from html versions, whose
               // checkboxes may be genuinely interactive (D18 scripts run)
-              className={`board-content ${board.format}`}
-              // biome-ignore lint/security/noDangerouslySetInnerHtml: the sanctioned host-chrome display mode — markdown content is sanitized server-side at publish and script-free by construction (invariant 5, markdown through DOMPurify — docs/security.md "Content rules"); html boards mount through mountBoardDocument instead (D18)
+              className={`board-content ${version.format}`}
+              // biome-ignore lint/security/noDangerouslySetInnerHtml: the sanctioned host-chrome display mode — markdown content is sanitized server-side at publish and script-free by construction (invariant 5, markdown through DOMPurify — docs/security.md "Content rules"); html versions mount through mountBoardDocument instead (D18)
               dangerouslySetInnerHTML={
-                board.format === "html"
+                version.format === "html"
                   ? undefined
                   : { __html: boardBodyHtml(version.content) }
               }

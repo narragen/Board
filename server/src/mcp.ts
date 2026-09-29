@@ -116,6 +116,7 @@ function versionMetaResult(
   return textResult({
     board_id: version.board_id,
     n: version.n,
+    format: version.format,
     label: version.label,
     note: version.note,
     anchors: version.anchors,

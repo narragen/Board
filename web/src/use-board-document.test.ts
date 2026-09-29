@@ -1,6 +1,6 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement, useRef } from "react";
-import type { Board, Version } from "../../server/src/domain.ts";
+import type { BoardFormat, Version } from "../../server/src/domain.ts";
 import type { BoardWithVersions } from "./api.ts";
 import * as boardMount from "./board-mount.ts";
 import * as mermaidModule from "./mermaid.ts";
@@ -57,12 +57,15 @@ afterEach(async () => {
   mermaidCalls.length = 0;
 });
 
-function boardData(format: Board["format"]): BoardWithVersions {
+// The board's own format is deliberately markdown everywhere: the hook must
+// switch on each VERSION's format (a board may mix them), so an html version
+// on this board still has to mount.
+function boardData(): BoardWithVersions {
   return {
     board: {
       id: "b1",
       title: "Plan",
-      format,
+      format: "markdown",
       status: "open",
       tags: [],
       created_by: "agent-1",
@@ -73,10 +76,11 @@ function boardData(format: Board["format"]): BoardWithVersions {
   };
 }
 
-function versionAt(n: number): Version {
+function versionAt(n: number, format: BoardFormat): Version {
   return {
     board_id: "b1",
     n,
+    format,
     label: null,
     note: null,
     anchors: [],
@@ -107,8 +111,8 @@ describe("useBoardDocument", () => {
   test("a markdown board renders its diagrams in place and never mounts", async () => {
     const container = render(
       createElement(Probe, {
-        version: versionAt(2),
-        data: boardData("markdown"),
+        version: versionAt(2, "markdown"),
+        data: boardData(),
       }),
     );
     await act(async () => {});
@@ -119,12 +123,14 @@ describe("useBoardDocument", () => {
   });
 
   test("a markdown version switch cancels the render it superseded", async () => {
-    const data = boardData("markdown");
-    render(createElement(Probe, { version: versionAt(2), data }));
+    const data = boardData();
+    render(createElement(Probe, { version: versionAt(2, "markdown"), data }));
     await act(async () => {});
     const superseded = mermaidCalls[0];
     await act(async () => {
-      rerender(createElement(Probe, { version: versionAt(1), data }));
+      rerender(
+        createElement(Probe, { version: versionAt(1, "markdown"), data }),
+      );
     });
     // mermaid.ts polls this between its own awaits — a true reading is what
     // stops it drawing into content that has already been replaced
@@ -134,9 +140,9 @@ describe("useBoardDocument", () => {
   });
 
   test("an html board mounts first and renders diagrams only once the mount resolves (D26)", async () => {
-    const version = versionAt(2);
+    const version = versionAt(2, "html");
     const container = render(
-      createElement(Probe, { version, data: boardData("html") }),
+      createElement(Probe, { version, data: boardData() }),
     );
     await act(async () => {});
     expect(mountCalls).toHaveLength(1);
@@ -152,14 +158,14 @@ describe("useBoardDocument", () => {
   });
 
   test("a version switch mid-mount aborts the superseded sequence", async () => {
-    const data = boardData("html");
-    render(createElement(Probe, { version: versionAt(2), data }));
+    const data = boardData();
+    render(createElement(Probe, { version: versionAt(2, "html"), data }));
     await act(async () => {});
     expect(mountCalls).toHaveLength(1);
     // the switch lands BEFORE the first mount resolves: that effect is torn
     // down and a second mount starts
     await act(async () => {
-      rerender(createElement(Probe, { version: versionAt(1), data }));
+      rerender(createElement(Probe, { version: versionAt(1, "html"), data }));
     });
     expect(mountCalls).toHaveLength(2);
     // the superseded mount resolving into a container that now holds the other
@@ -177,7 +183,10 @@ describe("useBoardDocument", () => {
 
   test("an unmount mid-mount aborts the sequence", async () => {
     render(
-      createElement(Probe, { version: versionAt(2), data: boardData("html") }),
+      createElement(Probe, {
+        version: versionAt(2, "html"),
+        data: boardData(),
+      }),
     );
     await act(async () => {});
     expect(mountCalls).toHaveLength(1);
@@ -188,9 +197,29 @@ describe("useBoardDocument", () => {
     expect(mermaidCalls).toHaveLength(0);
   });
 
+  test("a mixed board: switching html → markdown aborts the mount and renders in place", async () => {
+    const data = boardData();
+    render(createElement(Probe, { version: versionAt(2, "html"), data }));
+    await act(async () => {});
+    expect(mountCalls).toHaveLength(1);
+    await act(async () => {
+      rerender(
+        createElement(Probe, { version: versionAt(1, "markdown"), data }),
+      );
+    });
+    // markdown renders its diagrams in place — no second mount
+    expect(mountCalls).toHaveLength(1);
+    expect(mermaidCalls).toHaveLength(1);
+    // the superseded html mount resolving late draws nothing
+    await act(async () => {
+      mountCalls[0].resolve();
+    });
+    expect(mermaidCalls).toHaveLength(1);
+  });
+
   test("nothing runs before the board and its version are both loaded", async () => {
-    render(createElement(Probe, { version: null, data: boardData("html") }));
-    render(createElement(Probe, { version: versionAt(2), data: null }));
+    render(createElement(Probe, { version: null, data: boardData() }));
+    render(createElement(Probe, { version: versionAt(2, "html"), data: null }));
     await act(async () => {});
     expect(mountCalls).toHaveLength(0);
     expect(mermaidCalls).toHaveLength(0);
