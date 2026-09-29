@@ -150,7 +150,7 @@ form.insertAdjacentHTML("afterbegin", QUESTIONS.map((q) => `
     <div class="mb-2">${q.body}</div>
     <p class="rec"><b>Recommended: ${Array.isArray(q.rec) ? q.rec.join(", ") : q.rec}.</b> ${q.why || ""}</p>
     ${control(q)}
-    <label class="note">Note — optional, and the most useful thing you can tell me is that the options themselves are wrong.
+    <label class="note">Additional notes — optional, and the most useful thing you can tell me is that the options themselves are wrong.
       <textarea name="${q.id}::note" rows="2"></textarea>
     </label>
   </fieldset>`).join(""));

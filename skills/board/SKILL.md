@@ -1,9 +1,16 @@
 ---
 name: board
-description: Publish plans and results to the shared board for async human review, then consume the anchored feedback that comes back. Use when the user asks to publish or put something "on the board", wants human review of a plan or result, mentions board feedback or the board daemon, or when board_* MCP tools are available.
+description: Publish plans and results to the shared board for async human review, then consume the anchored feedback that comes back. Use when the user asks to publish or put something "on the board", wants human review of a plan or result, mentions board feedback or the board daemon, or when board_* MCP tools are available. Two rules that always apply: a question with options goes on a clickable html form (the interview skill), never markdown; and resolve each comment in the same pass that addresses it.
 ---
 
 # board — async human review
+
+## Two rules that always apply
+
+Both are easy to forget partway through a long task.
+
+1. **A question with options on a board is a form, never markdown.** When you put a choice in front of the human on a board — between options, yes/no, a ranking — publish it as html built with the `interview` skill: radio buttons or checkboxes, plus an "Additional notes" field per question. Never publish options as markdown for the human to highlight and comment on. (Whether to board a question at all is *When to board*, below; a table comparing options you have already chosen between is not a question.)
+2. **Resolve what you have handled, in the same pass.** Once you have acted on a comment, answered it, or read it and decided it needs nothing, `board_resolve` it right then — including when your fix ships as a new version. The one exception: your reply asks the human something, so their answer is still owed. Leave that thread open; it is the only kind that should stay open.
 
 ## What boards are
 
@@ -28,7 +35,7 @@ Do NOT board quick factual questions, code review that belongs in diff/PR toolin
 3. **Tell the human**: say the board is ready and how to open it — `board open <id>` from the CLI, or `make open <id>` in the repo. Do not open a browser yourself.
 4. **Poll**: run the capped poller (below) between task steps.
 5. **Reply**: for each new comment, `board_reply` (comment id, body) in that comment's thread — answer questions, say what you changed.
-6. **Resolve**: `board_resolve` (comment id) ONLY when the thread is actually addressed. Never resolve to make noise go away — an unresolved comment is the human's signal that work remains.
+6. **Resolve**: `board_resolve` (comment id) in the same pass — rule 2 above. An open thread tells the human work remains, so leave one open only when you are waiting on their answer.
 7. **End**: when the work is done and threads are settled, `board_end` (board id) closes the loop.
 
 ## Vehicles, never homes

@@ -1,6 +1,6 @@
 ---
 name: interview
-description: Interview the human until the design is settled — rounds of numbered questions on a board they click through, each question carrying your recommended answer. Use when scoping work, stress-testing a plan, or when a request is underspecified and guessing would be expensive.
+description: Interview the human until the design is settled — rounds of numbered questions on a board they click through, each question carrying your recommended answer. Use when scoping work, stress-testing a plan, when a request is underspecified and guessing would be expensive, and whenever you have questions with options to put in front of the human.
 ---
 
 # interview — settle the design before you write code
@@ -36,7 +36,7 @@ Don't block on that digging. A running investigation is an unsettled prerequisit
 
 1. **Get a board.** `board_status`; if nothing is up, start a session board (`board up` — the D21 default). Chat rounds are the fallback, and they cost you click-to-choose.
 2. **Say where the outcome will land** before round 1 (see *Where the answers end up*).
-3. **Publish round N** as an html board built from `templates/interview-round.html` (see *Building the board*).
+3. **Publish round N** as an html board built from `templates/interview-round.html` (see *Building the board*). Create the board with `format: "html"` — `board_create` defaults to markdown.
 4. **Hand over the link** and say what you will be doing while you wait.
 5. **Keep working.** Poll only when genuinely blocked — `board_get_comments` with a `since` cursor, exactly as the `board` skill prescribes.
 6. **Recompute the frontier** from the answers. Publish round N+1 as a new version of the *same* board.
@@ -71,7 +71,7 @@ Every question also gets a visible free-text note field. The template puts it th
 
 ## Building the board
 
-Start from `templates/interview-round.html`, in this skill's own directory: fill in the heading, the intro line, and the `QUESTIONS` array. Everything else renders itself.
+Start from `templates/interview-round.html`, in this skill's own directory: fill in the heading, the intro line, and the `QUESTIONS` array, and set `BOARD_ID` and `VERSION_N` — the version this publish becomes, the board's `current_version` + 1. A stale `VERSION_N` files the answers against an earlier round. Everything else renders itself.
 
 It already handles styling — `class="board-ui"` for form chrome plus Tailwind loaded and ready (D28) — and the IIFE your script must live in. The `board` skill has the rules behind both, plus what a diagram or chart needs. If you use Tailwind, take colors from Board's tokens (`bg-[var(--bg-subtle)]`), never from Tailwind's palette.
 
@@ -90,6 +90,7 @@ They arrive as one comment per round, carrying JSON:
 
 - **Compare against your recommendation yourself.** The board does not tell you whether the human agreed, because you already know what you recommended. Where they overruled you is the most informative part of the round — read for it deliberately.
 - **Read `note` even when `chose` matches.** Agreement plus a caveat is common, and the caveat usually changes the build.
+- **Resolve the answers comment once you have acted on it** — the `board` skill's rule 2. The round's answers are handled when the next round, or the build, reflects them.
 - **Read the whole comment, not just the JSON.** A human who cannot work out how to submit will file a separate comment as insurance, and that comment is real feedback about the page you built.
 
 ## Where the answers end up
